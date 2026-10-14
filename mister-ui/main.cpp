@@ -154,7 +154,8 @@ public:
         addPair(2, "Field order:", m_field, "Flicker filter:", m_flicker);
         auto* testBtn = new QPushButton("Test connection");
         auto* coreBtn = new QPushButton("Launch Groovy core");
-        auto* sshBtn = new QPushButton("SSH login…");
+        auto* sshBtn = new QPushButton("Setup…");
+        sshBtn->setToolTip("SSH login, SSH port and core path for \"Launch Groovy core\"");
         testBtn->setToolTip("Sends a status request to the MiSTer (UDP 32100) and waits for the reply");
         coreBtn->setToolTip("Over SSH: load the newest /media/fat/_Utility/Groovy_*.rbf on the MiSTer");
         auto* misterRow = new QHBoxLayout;
@@ -447,10 +448,13 @@ private:
         m_ssh.setProcessEnvironment(env);
         m_ssh.setStandardInputFile(QProcess::nullDevice());
         const QString user = m_set.value("sshUser", "root").toString();
+        const QString port = QString::number(m_set.value("sshPort", 22).toInt());
+        QString pat = m_set.value("corePath", kDefaultCore).toString().trimmed();
+        if (pat.isEmpty()) pat = kDefaultCore;
         const QString remote =
-            "f=$(ls -t /media/fat/_Utility/Groovy_*.rbf 2>/dev/null | head -1); [ -n \"$f\" ] || exit 3; "
+            "f=$(ls -t " + pat + " 2>/dev/null | head -1); [ -n \"$f\" ] || exit 3; "
             "echo \"load_core $f\" > /dev/MiSTer_cmd";
-        m_ssh.start("ssh", {"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+        m_ssh.start("ssh", {"-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
                             "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", user + "@" + host, remote});
         m_status->setText("Loading Groovy core on the MiSTer…");
     }
@@ -459,27 +463,48 @@ private:
         if (code == 0)
             m_status->setText("Groovy core loading - give it a few seconds, then \"Test connection\"");
         else if (code == 3)
-            m_status->setText("No Groovy_*.rbf found in /media/fat/_Utility on the MiSTer");
+            m_status->setText("No core file found on the MiSTer (check the core path in Setup…)");
         else
             m_status->setText("SSH failed (" + QString::number(code) + "): " +
                               QString::fromUtf8(m_ssh.readAllStandardError()).trimmed().left(160));
     }
+    static inline const QString kDefaultCore = "/media/fat/_Utility/Groovy_*.rbf";
+
     void sshDialog() {
         QDialog d(this);
-        d.setWindowTitle("MiSTer SSH login");
+        d.setWindowTitle("MiSTer setup");
         auto* f = new QFormLayout(&d);
         auto* u = new QLineEdit(m_set.value("sshUser", "root").toString());
         auto* pw = new QLineEdit(m_set.value("sshPass", "1").toString());
         pw->setEchoMode(QLineEdit::Password);
         pw->setToolTip("Stored unencrypted in the settings file (MiSTer default: root / 1).");
-        f->addRow("User:", u);
-        f->addRow("Password:", pw);
+        auto* port = new QSpinBox;
+        port->setRange(1, 65535);
+        port->setValue(m_set.value("sshPort", 22).toInt());
+        auto* core = new QLineEdit(m_set.value("corePath", kDefaultCore).toString());
+        core->setToolTip("File (or glob) of the Groovy core on the MiSTer; the newest match is loaded.");
+        f->addRow("SSH user:", u);
+        f->addRow("SSH password:", pw);
+        f->addRow("SSH port:", port);
+        f->addRow("Core file:", core);
+        f->addRow(new QLabel("Streaming uses UDP 32100 (fixed by the Groovy core)."));
+        auto* btns = new QHBoxLayout;
+        auto* defaults = new QPushButton("Defaults");
         auto* ok = new QPushButton("Save");
-        f->addRow(ok);
+        btns->addWidget(defaults);
+        btns->addStretch(1);
+        btns->addWidget(ok);
+        f->addRow(btns);
+        connect(defaults, &QPushButton::clicked, &d, [=] {
+            u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultCore);
+        });
         connect(ok, &QPushButton::clicked, &d, &QDialog::accept);
+        d.setMinimumWidth(440);
         if (d.exec() == QDialog::Accepted) {
             m_set.setValue("sshUser", u->text().trimmed());
             m_set.setValue("sshPass", pw->text());
+            m_set.setValue("sshPort", port->value());
+            m_set.setValue("corePath", core->text().trimmed());
         }
     }
 

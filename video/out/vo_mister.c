@@ -244,7 +244,17 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     struct mp_rect pr = {MPMAX(p->pic.x, 0), MPMAX(p->pic.y, 0),
                          MPMIN(p->pic.x + p->pic.w, img->w), MPMIN(p->pic.y + p->pic.h, img->h)};
     mp_image_crop_rc(&osd_img, pr);   // subtitles live inside the calibrated picture
-    osd_draw_on_image(vo->osd, p->osd, frame->current ? frame->current->pts : 0, 0, &osd_img);
+    // The OSD must not be larger than the image it is drawn on (mp_draw_sub_bitmaps asserts it);
+    // that happens when the calibrated picture sticks out of the raster.
+    struct mp_osd_res ores = p->osd;
+    ores.w = MPMIN(ores.w, osd_img.w);
+    ores.h = MPMIN(ores.h, osd_img.h);
+    ores.mt = MPMIN(ores.mt, ores.h);
+    ores.mb = MPMIN(ores.mb, ores.h - ores.mt);
+    ores.ml = MPMIN(ores.ml, ores.w);
+    ores.mr = MPMIN(ores.mr, ores.w - ores.ml);
+    if (osd_img.w > 0 && osd_img.h > 0)
+        osd_draw_on_image(vo->osd, ores, frame->current ? frame->current->pts : 0, 0, &osd_img);
     mister_set_frame(img->planes[0], img->stride[0]);
     return VO_TRUE;
 }

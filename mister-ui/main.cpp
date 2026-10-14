@@ -319,15 +319,16 @@ public:
         auto* plLay = new QVBoxLayout(plBox);
         plLay->addWidget(m_list, 1);
         plLay->addLayout(plRow);
+        plLay->addLayout(fileRow);   // URL bar for YouTube / streams under the button row
         QFont sf = m_status->font();
         sf.setBold(true);
         sf.setPointSizeF(sf.pointSizeF() + 1);
         m_status->setFont(sf);
         m_status->setText("stopped");
-        root->addLayout(fileRow);
         root->addWidget(m_status);
         root->addLayout(seekRow);
         root->addLayout(btns);
+        root->addSpacing(14);        // air between the transport buttons and the playlist
         root->addWidget(plBox, 1);
         root->addWidget(outBox);
         root->addWidget(trackBox);

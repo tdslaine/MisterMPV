@@ -1,4 +1,4 @@
-# 🙏 Credits and sources
+# Credits and sources
 
 misterMPV stands on a lot of other people's work. This file lists **what we took, from where, how we use it and under
 which license**. If something here is wrong or missing, please open an issue.

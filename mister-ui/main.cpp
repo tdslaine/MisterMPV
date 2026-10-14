@@ -549,6 +549,7 @@ public:
         m_list->viewport()->installEventFilter(this);
         installShortcuts();
         restoreGeometry(m_set.value("geometry").toByteArray());
+        showTagProgress();
     }
 
 protected:
@@ -988,13 +989,19 @@ private:
         QFile f(tagCachePath());
         if (!f.open(QIODevice::ReadOnly)) return;
         const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-        for (auto it = o.begin(); it != o.end(); ++it) m_tags.insert(it.key(), it.value().toString());
+        for (auto it = o.begin(); it != o.end(); ++it) m_tags.insert(it.key(), it.value().toString().replace(" – ", " - "));
     }
     void saveTags() {
         QJsonObject o;
         for (auto it = m_tags.begin(); it != m_tags.end(); ++it) o.insert(it.key(), it.value());
         QFile f(tagCachePath());
         if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    }
+    // While nothing plays, the status line tells that tags are still being read.
+    void showTagProgress() {
+        if (!m_status || m_proc.state() != QProcess::NotRunning) return;
+        const int left = m_tagQueue.size() + m_tagRunning;
+        m_status->setText(left > 0 ? QString("Reading tags… %1 left").arg(left) : QString("stopped"));
     }
     bool inList(const QString& path) const {
         for (int i = 0; i < m_list->count(); i++)
@@ -1007,6 +1014,7 @@ private:
         const QFileInfo fi(path);
         if (!fi.isFile() || !audio.contains(fi.suffix().toLower())) return;
         m_tagQueue << path;
+        if (m_tagQueue.size() % 25 == 1) showTagProgress();
         pumpTags();
     }
     void pumpTags() {
@@ -1026,7 +1034,7 @@ private:
                 };
                 QString artist = get("artist"), title = get("title");
                 if (artist.isEmpty()) artist = get("album_artist");
-                if (!title.isEmpty()) label = artist.isEmpty() ? title : artist + " – " + title;
+                if (!title.isEmpty()) label = artist.isEmpty() ? title : artist + " - " + title;
                 m_tags.insert(path, label);   // "" = no usable tags, do not probe again
                 if (!label.isEmpty()) {
                     for (int i = 0; i < m_list->count(); i++) {
@@ -1039,6 +1047,7 @@ private:
                 pr->deleteLater();
                 m_tagRunning--;
                 if ((++m_tagDone % 40) == 0 || (m_tagQueue.isEmpty() && m_tagRunning == 0)) saveTags();
+                showTagProgress();
                 pumpTags();
             });
             connect(pr, &QProcess::errorOccurred, this, [this, pr, path](QProcess::ProcessError e) {
@@ -1350,7 +1359,7 @@ private:
     QDialog* m_calDlg;
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
-    QLabel *m_time, *m_status, *m_led;
+    QLabel *m_time = nullptr, *m_status = nullptr, *m_led = nullptr;
     QPushButton *m_play, *m_stop;
     QProcess m_proc;
     QProcess m_ssh;

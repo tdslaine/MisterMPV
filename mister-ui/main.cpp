@@ -15,6 +15,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QShortcut>
+#include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QKeySequence>
+#include <QAbstractSpinBox>
+#include <functional>
 #include <QCollator>
 #include <QMenu>
 #include <QToolButton>
@@ -144,6 +152,7 @@ public:
         plRow->addWidget(m_repeat);
         plRow->addWidget(m_shuffle);
         plRow->addStretch(1);
+        loadTags();
         for (const QString& f : m_set.value("playlist").toStringList()) addLocal(f);
 
         m_host = new QLineEdit(qEnvironmentVariable("MISTER_HOST", m_set.value("host").toString()));
@@ -440,13 +449,7 @@ public:
             if (!f.isEmpty()) { addEntry(resolveLocation(f)); m_file->clear(); }
         });
         connect(m_file, &QLineEdit::returnPressed, addUrl, &QPushButton::click);
-        connect(plRemove, &QPushButton::clicked, this, [this] {
-            QList<int> rows;
-            for (auto* it : m_list->selectedItems()) rows << m_list->row(it);
-            std::sort(rows.begin(), rows.end(), std::greater<int>());   // highest first keeps indices valid
-            for (int r : rows) removeEntry(r);
-            savePlaylist();
-        });
+        connect(plRemove, &QPushButton::clicked, this, [this] { removeSelected(); });
         connect(plClear, &QPushButton::clicked, this, [this] {
             if (running()) cmd({"playlist-clear"}); else m_list->clear();
             savePlaylist();
@@ -538,11 +541,106 @@ public:
             if (m_sock.waitForConnected(50) || ++m_tries > 40) {
                 m_retry.stop();
                 if (m_sock.state() == QLocalSocket::ConnectedState) onConnected();
+                else if (m_proc.state() != QProcess::NotRunning) { setLed(Led::Stopped); m_status->setText("could not reach mpv's control socket"); }
             }
         });
+
+        setAcceptDrops(true);
+        m_list->viewport()->installEventFilter(this);
+        installShortcuts();
+        restoreGeometry(m_set.value("geometry").toByteArray());
+    }
+
+protected:
+    void closeEvent(QCloseEvent* e) override {
+        m_set.setValue("geometry", saveGeometry());
+        saveTags();
+        QWidget::closeEvent(e);
+    }
+    void dragEnterEvent(QDragEnterEvent* e) override { acceptDrop(e); }
+    void dragMoveEvent(QDragMoveEvent* e) override { acceptDrop(e); }
+    void dropEvent(QDropEvent* e) override { takeDrop(e); }
+    bool eventFilter(QObject* o, QEvent* ev) override {
+        if (o == m_list->viewport()) {   // files from a file manager dropped onto the list
+            switch (ev->type()) {
+            case QEvent::DragEnter:
+            case QEvent::DragMove: if (acceptDrop(static_cast<QDropEvent*>(ev))) return true; break;
+            case QEvent::Drop:     if (takeDrop(static_cast<QDropEvent*>(ev))) return true; break;
+            default: break;
+            }
+        }
+        return QWidget::eventFilter(o, ev);
+    }
+
+public:
+    // Command line / "open with": add everything and start with the first new entry.
+    void openArgs(const QStringList& args) {
+        const int first = m_list->count();
+        for (const QString& a : args) {
+            const QFileInfo fi(a);
+            if (fi.isDir()) addFolder(fi.absoluteFilePath());
+            else if (fi.exists()) addEntry(fi.absoluteFilePath());
+            else if (a.contains("://")) addEntry(resolveLocation(a));
+        }
+        if (m_list->count() > first && m_proc.state() == QProcess::NotRunning) start(first);
     }
 
 private:
+    bool acceptDrop(QDropEvent* e) {
+        if (e->mimeData()->hasUrls() || (e->mimeData()->hasText() && e->mimeData()->text().contains("://"))) {
+            e->acceptProposedAction();
+            return true;
+        }
+        return false;
+    }
+    bool takeDrop(QDropEvent* e) {
+        if (!acceptDrop(e)) return false;
+        QList<QUrl> urls = e->mimeData()->urls();
+        if (urls.isEmpty()) urls << QUrl::fromUserInput(e->mimeData()->text().trimmed());
+        for (const QUrl& u : urls) {
+            const QString loc = u.isLocalFile() ? u.toLocalFile() : u.toString();
+            if (u.isLocalFile() && QFileInfo(loc).isDir()) addFolder(loc);
+            else addEntry(resolveLocation(loc));
+        }
+        return true;
+    }
+
+    // Winamp keys: Z prev, X play/restart, C pause, V stop, B next; Space = pause; Ctrl+arrows seek/volume.
+    void installShortcuts() {
+        auto typing = [] {
+            QWidget* f = QApplication::focusWidget();
+            auto* cb = qobject_cast<QComboBox*>(f);
+            return qobject_cast<QLineEdit*>(f) || qobject_cast<QAbstractSpinBox*>(f) || (cb && cb->isEditable());
+        };
+        auto bind = [this, typing](const QKeySequence& k, std::function<void()> fn) {
+            auto* sc = new QShortcut(k, this);
+            connect(sc, &QShortcut::activated, this, [typing, fn] { if (!typing()) fn(); });
+        };
+        auto togglePause = [this] {
+            if (m_proc.state() == QProcess::NotRunning) start(); else cmd({"cycle", "pause"});
+        };
+        bind(Qt::Key_Space, togglePause);
+        bind(Qt::Key_C, togglePause);
+        bind(Qt::Key_X, [this] { if (m_proc.state() == QProcess::NotRunning) start(); else cmd({"seek", 0, "absolute"}); });
+        bind(Qt::Key_V, [this] { if (m_proc.state() != QProcess::NotRunning) stop(); });
+        bind(Qt::Key_Z, [this] { cmd({"script-message", "mister-prev"}); });
+        bind(Qt::Key_B, [this] { cmd({"script-message", "mister-next"}); });
+        bind(Qt::Key_M, [this] { cmd({"cycle", "mute"}); });
+        bind(Qt::CTRL | Qt::Key_Left,  [this] { cmd({"seek", -10, "relative"}); });
+        bind(Qt::CTRL | Qt::Key_Right, [this] { cmd({"seek", 10, "relative"}); });
+        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Left,  [this] { cmd({"seek", -60, "relative"}); });
+        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Right, [this] { cmd({"seek", 60, "relative"}); });
+        bind(Qt::CTRL | Qt::Key_Up,   [this] { m_vol->setValue(m_vol->value() + 5); });
+        bind(Qt::CTRL | Qt::Key_Down, [this] { m_vol->setValue(m_vol->value() - 5); });
+        auto* del = new QShortcut(Qt::Key_Delete, m_list);
+        del->setContext(Qt::WidgetShortcut);
+        connect(del, &QShortcut::activated, this, [this] { removeSelected(); });
+        connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem* it) {   // Enter plays
+            const int r = m_list->row(it);
+            if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r}); else start(r);
+        });
+    }
+
     void setControlsEnabled(bool on) {
         for (auto* w : {(QWidget*)m_prev, (QWidget*)m_next, (QWidget*)m_stop, (QWidget*)m_seek, (QWidget*)m_audio, (QWidget*)m_sub})
             w->setEnabled(on);
@@ -585,12 +683,13 @@ private:
     }
 
     // Status LED: green = playing, blue = paused, red = stopped
-    enum class Led { Stopped, Playing, Paused };
+    enum class Led { Stopped, Starting, Playing, Paused };
     void setLed(Led l) {
         const char *hi, *mid, *lo, *tip;
         switch (l) {
         case Led::Playing: hi = "#c4ffc4"; mid = "#22c522"; lo = "#0b6b0b"; tip = "playing"; break;
         case Led::Paused:  hi = "#c4dcff"; mid = "#2a7bff"; lo = "#0b3a8a"; tip = "paused"; break;
+        case Led::Starting: hi = "#fff3b8"; mid = "#f2c200"; lo = "#7a5c00"; tip = "starting"; break;
         default:           hi = "#ffc4c4"; mid = "#e02020"; lo = "#7a0a0a"; tip = "stopped"; break;
         }
         m_led->setToolTip(tip);
@@ -795,7 +894,8 @@ private:
             e.path = m_list->item(i)->data(Qt::UserRole).toString();
             const QFileInfo fi(e.path);
             e.local = fi.exists();
-            e.name = e.local ? fi.fileName() : e.path;
+            const QString lbl = m_list->item(i)->data(Qt::UserRole + 1).toString();
+            e.name = !lbl.isEmpty() ? lbl : (e.local ? fi.fileName() : e.path);
             e.dir = e.local ? fi.absolutePath() : QString();
             if (e.local) e.mtime = fi.lastModified();
             es << e;
@@ -864,14 +964,92 @@ private:
 
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
 
-    static QString entryLabel(const QString& f) {
+    QString entryLabel(const QString& f) const {
+        const QString tag = m_tags.value(f);
+        if (!tag.isEmpty()) return tag;
         return QFileInfo::exists(f) ? QFileInfo(f).fileName() : f;
     }
     void addLocal(const QString& f) {
-        auto* it = new QListWidgetItem(entryLabel(f));
+        const QString label = entryLabel(f);
+        auto* it = new QListWidgetItem(label);
         it->setData(Qt::UserRole, f);
+        it->setData(Qt::UserRole + 1, label);   // plain label (no "▶ "), used for sorting
         it->setToolTip(f);
         m_list->addItem(it);
+        queueTags(f);
+    }
+
+    // "Artist – Title" for audio files from the tags (ffprobe), read in the background and cached.
+    QString tagCachePath() const {
+        QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
+        return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/misterMPV-tags.json";
+    }
+    void loadTags() {
+        QFile f(tagCachePath());
+        if (!f.open(QIODevice::ReadOnly)) return;
+        const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+        for (auto it = o.begin(); it != o.end(); ++it) m_tags.insert(it.key(), it.value().toString());
+    }
+    void saveTags() {
+        QJsonObject o;
+        for (auto it = m_tags.begin(); it != m_tags.end(); ++it) o.insert(it.key(), it.value());
+        QFile f(tagCachePath());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    }
+    bool inList(const QString& path) const {
+        for (int i = 0; i < m_list->count(); i++)
+            if (m_list->item(i)->data(Qt::UserRole).toString() == path) return true;
+        return false;
+    }
+    void queueTags(const QString& path) {
+        static const QStringList audio = {"mp3", "flac", "ogg", "opus", "m4a", "aac", "wma", "wav", "ape", "mka"};
+        if (m_tags.contains(path) || m_tagQueue.contains(path)) return;
+        const QFileInfo fi(path);
+        if (!fi.isFile() || !audio.contains(fi.suffix().toLower())) return;
+        m_tagQueue << path;
+        pumpTags();
+    }
+    void pumpTags() {
+        while (m_tagRunning < 4 && !m_tagQueue.isEmpty()) {
+            const QString path = m_tagQueue.takeFirst();
+            if (!inList(path)) continue;   // removed/cleared while waiting
+            auto* pr = new QProcess(this);
+            m_tagRunning++;
+            connect(pr, &QProcess::finished, this, [this, pr, path] {
+                QString label;
+                const QJsonObject tags = QJsonDocument::fromJson(pr->readAllStandardOutput()).object()
+                                             .value("format").toObject().value("tags").toObject();
+                auto get = [&](const char* k) {
+                    for (auto it = tags.begin(); it != tags.end(); ++it)
+                        if (it.key().compare(k, Qt::CaseInsensitive) == 0) return it.value().toString().trimmed();
+                    return QString();
+                };
+                QString artist = get("artist"), title = get("title");
+                if (artist.isEmpty()) artist = get("album_artist");
+                if (!title.isEmpty()) label = artist.isEmpty() ? title : artist + " – " + title;
+                m_tags.insert(path, label);   // "" = no usable tags, do not probe again
+                if (!label.isEmpty()) {
+                    for (int i = 0; i < m_list->count(); i++) {
+                        auto* it = m_list->item(i);
+                        if (it->data(Qt::UserRole).toString() != path) continue;
+                        it->setData(Qt::UserRole + 1, label);
+                        it->setText((it->font().bold() ? "▶ " : "") + label);
+                    }
+                }
+                pr->deleteLater();
+                m_tagRunning--;
+                if ((++m_tagDone % 40) == 0 || (m_tagQueue.isEmpty() && m_tagRunning == 0)) saveTags();
+                pumpTags();
+            });
+            connect(pr, &QProcess::errorOccurred, this, [this, pr, path](QProcess::ProcessError e) {
+                if (e != QProcess::FailedToStart) return;
+                m_tags.insert(path, QString());
+                pr->deleteLater();
+                m_tagRunning--;
+            });
+            pr->start("ffprobe", {"-v", "error", "-show_entries", "format_tags=artist,title,album_artist",
+                                  "-of", "json", path});
+        }
     }
     void savePlaylist() {
         QStringList l;
@@ -881,6 +1059,13 @@ private:
     // While mpv runs it owns the list (it reports back via the "playlist" property).
     void addEntry(const QString& f) {
         if (running()) cmd({"loadfile", f, "append"}); else addLocal(f);
+        savePlaylist();
+    }
+    void removeSelected() {
+        QList<int> rows;
+        for (auto* it : m_list->selectedItems()) rows << m_list->row(it);
+        std::sort(rows.begin(), rows.end(), std::greater<int>());   // highest first keeps indices valid
+        for (int r : rows) removeEntry(r);
         savePlaylist();
     }
     void removeEntry(int row) {
@@ -969,6 +1154,7 @@ private:
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
         m_proc.start(mpvPath(), a);
         m_status->setText("starting…");
+        setLed(Led::Starting);
         m_tries = 0;
         m_retry.start();
     }
@@ -1139,6 +1325,10 @@ private:
     QCheckBox* m_calib;
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
+    QHash<QString, QString> m_tags;
+    QStringList m_tagQueue;
+    int m_tagRunning = 0;
+    int m_tagDone = 0;
     bool m_syncing = false;
     bool m_remoteVS = false;   // volume/speed value came from mpv: do not send it back
     bool m_hasPendingPl = false;
@@ -1177,5 +1367,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     Window w;
     w.show();
+    const QStringList args = app.arguments().mid(1);
+    if (!args.isEmpty()) QTimer::singleShot(0, &w, [&] { w.openArgs(args); });
     return app.exec();
 }

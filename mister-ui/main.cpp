@@ -194,6 +194,7 @@ public:
         plRow->addWidget(m_repeat);
         plRow->addWidget(m_shuffle);
         plRow->addStretch(1);
+        m_libRoots = m_set.value("libRoots").toStringList();
         loadTags();
         for (const QString& f : m_set.value("playlist").toStringList()) addLocal(f);
 
@@ -1018,6 +1019,11 @@ private:
 
     // Winamp-style "add dir": all media files below the folder, natural order (01, 02, ..., 10).
     void addFolder(const QString& path) {
+        const QString root = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        if (!m_libRoots.contains(root)) {
+            m_libRoots << root;
+            m_set.setValue("libRoots", m_libRoots);
+        }
         static const QStringList filters = {
             "*.mkv", "*.mp4", "*.avi", "*.mov", "*.webm", "*.mpg", "*.mpeg", "*.ts", "*.m2ts", "*.wmv",
             "*.flv", "*.m4v", "*.ogv", "*.vob", "*.mp3", "*.flac", "*.ogg", "*.opus", "*.wav", "*.m4a",
@@ -1052,15 +1058,41 @@ private:
         return e;
     }
 
+    static bool isAudioFile(const QString& path) {
+        static const QStringList a = {"mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wma", "ape", "mka"};
+        return a.contains(QFileInfo(path).suffix().toLower());
+    }
+    // No artist tag: Artist/Album/track.mp3 -> the folder above the album folder; a file straight in
+    // Artist/ -> that folder. Generic folders (Music, Downloads, ...) never count as an artist.
+    QString folderArtist(const QString& path) const {
+        static const QStringList generic = {"music", "musik", "audio", "mp3", "mp3s", "songs", "downloads", "media",
+                                            "medien", "sounds", "library", "home", "mnt", "srv", "data", "tmp",
+                                            "youtube", "videos", "video", "music video", "music videos", "playlist", "playlists"};
+        auto ok = [&](const QString& n) { return !n.isEmpty() && n != "." && !generic.contains(n.toLower()); };
+        QDir parent = QFileInfo(path).dir();
+        const QString parentName = parent.dirName();
+        QDir grand = parent;
+        const bool up = grand.cdUp();
+        const QString grandName = up ? grand.dirName() : QString();
+        // the folder the user added is the library root, never an artist
+        const bool grandIsRoot = up && m_libRoots.contains(QDir::cleanPath(grand.absolutePath()));
+        if (ok(grandName) && !grandIsRoot) return grandName;
+        return ok(parentName) ? parentName : QString();
+    }
+
     void fillItem(QTreeWidgetItem* it) {
         const QString path = it->data(0, Qt::UserRole).toString();
         const Tag t = m_tags.value(path);
+        QString artist = t.artist;
+        const bool fromFolder = artist.isEmpty() && m_tags.contains(path) && isAudioFile(path);
+        if (fromFolder) artist = folderArtist(path);
         QString title = t.title;
         if (title.isEmpty()) title = path.contains("://") ? path : QFileInfo(path).fileName();
-        it->setText(1, t.artist);
+        it->setText(1, artist);
+        it->setToolTip(1, fromFolder && !artist.isEmpty() ? "no artist tag - taken from the folder name" : QString());
         it->setText(2, title);
         it->setText(3, t.dur > 0 ? fmtDur(t.dur) : QString());
-        it->setData(0, R_ARTIST, t.artist);
+        it->setData(0, R_ARTIST, artist);
         it->setData(0, R_TITLE, title);
         it->setData(0, R_DUR, t.dur);
         it->setToolTip(2, path);
@@ -1463,6 +1495,7 @@ private:
     QCheckBox* m_calib;
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
+    QStringList m_libRoots;
     QHash<QString, Tag> m_tags;
     QSet<QString> m_tagQueued;
     QStringList m_tagQueue;

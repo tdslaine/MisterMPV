@@ -25,6 +25,7 @@
 #include <functional>
 #include <QCollator>
 #include <QMenu>
+#include <QClipboard>
 #include <QToolButton>
 #include <QRandomGenerator>
 #include <QDateTime>
@@ -134,8 +135,8 @@ public:
 
         m_list = new PlaylistView;
         m_list->setMinimumHeight(110);
-        m_list->setColumnCount(4);
-        m_list->setHeaderLabels({"#", "Artist", "Title", "Time"});
+        m_list->setColumnCount(5);
+        m_list->setHeaderLabels({"#", "Artist", "Title", "Album", "Time"});
         m_list->setRootIsDecorated(false);
         m_list->setItemsExpandable(false);
         m_list->setUniformRowHeights(true);
@@ -155,12 +156,15 @@ public:
             h->setSectionResizeMode(0, QHeaderView::Fixed);
             h->setSectionResizeMode(1, QHeaderView::Interactive);
             h->setSectionResizeMode(2, QHeaderView::Stretch);
-            h->setSectionResizeMode(3, QHeaderView::Fixed);
+            h->setSectionResizeMode(3, QHeaderView::Interactive);
+            h->setSectionResizeMode(4, QHeaderView::Fixed);
             m_list->setColumnWidth(0, 56);
             m_list->setColumnWidth(1, 190);
-            m_list->setColumnWidth(3, 68);
+            m_list->setColumnWidth(3, 170);
+            m_list->setColumnWidth(4, 68);
+            m_list->setColumnHidden(3, !m_set.value("showAlbum", false).toBool());   // optional: header right-click
             m_list->headerItem()->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
-            m_list->headerItem()->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+            m_list->headerItem()->setTextAlignment(4, Qt::AlignRight | Qt::AlignVCenter);
         }
         auto* plRow = new QHBoxLayout;
         auto* plPrev = new QPushButton("◀◀  Prev");
@@ -180,7 +184,7 @@ public:
         auto* sortBtn = new QPushButton("Sort ▾");
         auto* sortMenu = new QMenu(sortBtn);
         const struct { const char* label; const char* key; } sorts[] = {
-            {"By artist", "artist"}, {"By title / name", "title"}, {"By time", "time"},
+            {"By artist", "artist"}, {"By title / name", "title"}, {"By album", "album"}, {"By time", "time"},
             {"By folder, then name", "folder"},
             {"By date (oldest first)", "dateold"}, {"By date (newest first)", "datenew"},
             {"Reverse order", "reverse"}, {"Randomize", "random"}};
@@ -514,6 +518,20 @@ public:
                     for (int i = 0; i < n; i++) cmd(QJsonArray{"playlist-move", start + i, dest + i});
             }
             savePlaylist();
+        });
+        m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_list, &QWidget::customContextMenuRequested, this, [this](const QPoint& p) { playlistMenu(p); });
+        m_list->header()->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_list->header(), &QWidget::customContextMenuRequested, this, [this](const QPoint& p) {
+            QMenu menu(this);
+            QAction* a = menu.addAction("Show album column");
+            a->setCheckable(true);
+            a->setChecked(!m_list->isColumnHidden(3));
+            connect(a, &QAction::toggled, this, [this](bool on) {
+                m_list->setColumnHidden(3, !on);
+                m_set.setValue("showAlbum", on);
+            });
+            menu.exec(m_list->header()->mapToGlobal(p));
         });
         connect(m_list->header(), &QHeaderView::sectionClicked, this, [this](int c) { sortByColumn(c); });
         connect(m_list, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* it) {
@@ -931,17 +949,17 @@ private:
     // mpv reports the result back and the debounced refresh redraws the list.
     // Column header click: toggle ascending/descending on the same column.
     void sortByColumn(int c) {
-        if (c < 1 || c > 3) return;
+        if (c < 1 || c > 4) return;
         m_sortAsc = (c == m_sortCol) ? !m_sortAsc : true;
         m_sortCol = c;
         m_list->header()->setSortIndicator(c, m_sortAsc ? Qt::AscendingOrder : Qt::DescendingOrder);
-        sortPlaylist(c == 1 ? "artist" : c == 2 ? "title" : "time", m_sortAsc);
+        sortPlaylist(c == 1 ? "artist" : c == 2 ? "title" : c == 3 ? "album" : "time", m_sortAsc);
     }
     void sortPlaylist(const QString& key, bool asc = true) {
         const int n = m_list->count();
         if (n < 2) return;
         if (key == "random" && running()) { cmd({"playlist-shuffle"}); return; }
-        struct E { int idx; QString path, name, artist, dir; QDateTime mtime; bool local; double dur; };
+        struct E { int idx; QString path, name, artist, album, dir; QDateTime mtime; bool local; double dur; };
         QVector<E> es;
         for (int i = 0; i < n; i++) {
             E e;
@@ -952,6 +970,7 @@ private:
             const QString lbl = m_list->item(i)->data(0, R_TITLE).toString();
             e.name = !lbl.isEmpty() ? lbl : (e.local ? fi.fileName() : e.path);
             e.artist = m_list->item(i)->data(0, R_ARTIST).toString();
+            e.album = m_list->item(i)->data(0, R_ALBUM).toString();
             e.dur = m_list->item(i)->data(0, R_DUR).toDouble();
             e.dir = e.local ? fi.absolutePath() : QString();
             if (e.local) e.mtime = fi.lastModified();
@@ -966,6 +985,13 @@ private:
             std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
                 if (a.artist.isEmpty() != b.artist.isEmpty()) return !a.artist.isEmpty();   // untagged last
                 const int c = coll.compare(a.artist, b.artist);
+                return c != 0 ? c < 0 : byName(a, b);
+            });
+            if (!asc) std::reverse(es.begin(), es.end());
+        } else if (key == "album") {
+            std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
+                if (a.album.isEmpty() != b.album.isEmpty()) return !a.album.isEmpty();
+                const int c = coll.compare(a.album, b.album);
                 return c != 0 ? c < 0 : byName(a, b);
             });
             if (!asc) std::reverse(es.begin(), es.end());
@@ -993,9 +1019,19 @@ private:
             std::mt19937 rng(QRandomGenerator::global()->generate());
             std::shuffle(es.begin(), es.end(), rng);
         }
+        QVector<int> order;
+        for (const E& e : es) order << e.idx;
+        applyOrder(order);
+    }
+
+    // Bring the playlist into `order` (a permutation of the current row indices). Stopped: rebuild the
+    // rows; running: mpv owns the order, so issue playlist-move commands (the playing entry keeps playing).
+    void applyOrder(const QVector<int>& order) {
+        const int n = m_list->count();
+        if (order.size() != n) return;
         if (!running()) {
             QStringList paths;
-            for (const E& e : es) paths << e.path;
+            for (int i : order) paths << m_list->item(i)->data(0, Qt::UserRole).toString();
             const QSignalBlocker b(m_list);
             m_list->clear();
             for (const QString& pth : paths) addLocal(pth);
@@ -1003,11 +1039,10 @@ private:
             savePlaylist();
             return;
         }
-        // running: move each wanted element into place, one playlist-move at a time
         QVector<int> cur(n);
         for (int i = 0; i < n; i++) cur[i] = i;
         for (int i = 0; i < n; i++) {
-            const int want = es[i].idx;
+            const int want = order[i];
             const int j = cur.indexOf(want);
             if (j != i) {
                 cmd(QJsonArray{"playlist-move", j, i});
@@ -1015,6 +1050,53 @@ private:
                 cur.insert(i, want);
             }
         }
+    }
+
+    // ---- right-click menu on the playlist --------------------------------------------------------
+    void playlistMenu(const QPoint& pos) {
+        QTreeWidgetItem* hit = m_list->itemAt(pos);
+        if (!hit) return;
+        if (!hit->isSelected()) { m_list->clearSelection(); hit->setSelected(true); }
+        QList<int> rows;
+        for (auto* it : m_list->selectedItems()) rows << m_list->row(it);
+        std::sort(rows.begin(), rows.end());
+        const QString path = hit->data(0, Qt::UserRole).toString();
+        QMenu menu(this);
+        menu.addAction("Play now", this, [this, hit] {
+            const int r = m_list->row(hit);
+            if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r}); else start(r);
+        });
+        menu.addAction("Play next", this, [this, rows] { moveRows(rows, false); });
+        menu.addAction("Move to end", this, [this, rows] { moveRows(rows, true); });
+        menu.addSeparator();
+        menu.addAction("Remove", this, [this] { removeSelected(); });
+        menu.addSeparator();
+        if (!path.contains("://")) {
+            menu.addAction("Open containing folder", this, [path] {
+                QProcess::startDetached("xdg-open", {QFileInfo(path).absolutePath()});
+            });
+        }
+        menu.addAction("Copy path / URL", this, [path] { QApplication::clipboard()->setText(path); });
+        menu.exec(m_list->viewport()->mapToGlobal(pos));
+    }
+    // "Play next": put the rows right behind the playing one (or at the top when nothing plays);
+    // "Move to end": append them. Their relative order is kept.
+    void moveRows(const QList<int>& rows, bool toEnd) {
+        const int n = m_list->count();
+        if (rows.isEmpty() || n < 2) return;
+        QVector<int> rest, moved;
+        for (int i = 0; i < n; i++) (rows.contains(i) ? moved : rest) << i;
+        int insertAt = rest.size();
+        if (!toEnd) {
+            insertAt = 0;                                  // nothing playing: front of the list
+            if (m_curRow >= 0 && running()) {
+                const int pos = rest.indexOf(m_curRow);    // playing row stays where it is in `rest`
+                insertAt = pos >= 0 ? pos + 1 : 0;
+            }
+        }
+        QVector<int> order = rest;
+        for (int k = 0; k < moved.size(); k++) order.insert(insertAt + k, moved[k]);
+        applyOrder(order);
     }
 
     // Winamp-style "add dir": all media files below the folder, natural order (01, 02, ..., 10).
@@ -1042,8 +1124,9 @@ private:
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
 
     // ---- playlist rows: # | Artist | Title | Time ---------------------------------------------------
-    struct Tag { QString artist, title; double dur = -1; };
-    static constexpr int R_ARTIST = Qt::UserRole + 1, R_TITLE = Qt::UserRole + 2, R_DUR = Qt::UserRole + 3;
+    struct Tag { QString artist, title, album; double dur = -1; };
+    static constexpr int R_ARTIST = Qt::UserRole + 1, R_TITLE = Qt::UserRole + 2, R_DUR = Qt::UserRole + 3,
+                         R_ALBUM = Qt::UserRole + 4;
 
     static QString fmtDur(double sec) {
         const qint64 t = qint64(sec + 0.5);
@@ -1086,15 +1169,23 @@ private:
         QString artist = t.artist;
         const bool fromFolder = artist.isEmpty() && m_tags.contains(path) && isAudioFile(path);
         if (fromFolder) artist = folderArtist(path);
+        QString album = t.album;
+        if (album.isEmpty() && m_tags.contains(path) && isAudioFile(path)) {
+            const QString parent = QFileInfo(path).dir().dirName();
+            if (!parent.isEmpty() && !m_libRoots.contains(QDir::cleanPath(QFileInfo(path).dir().absolutePath())))
+                album = parent;   // Artist/Album/track: the folder is the album
+        }
         QString title = t.title;
         if (title.isEmpty()) title = path.contains("://") ? path : QFileInfo(path).fileName();
         it->setText(1, artist);
         it->setToolTip(1, fromFolder && !artist.isEmpty() ? "no artist tag - taken from the folder name" : QString());
         it->setText(2, title);
-        it->setText(3, t.dur > 0 ? fmtDur(t.dur) : QString());
+        it->setText(3, album);
+        it->setText(4, t.dur > 0 ? fmtDur(t.dur) : QString());
         it->setData(0, R_ARTIST, artist);
         it->setData(0, R_TITLE, title);
         it->setData(0, R_DUR, t.dur);
+        it->setData(0, R_ALBUM, album);
         it->setToolTip(2, path);
     }
     void addLocal(const QString& f) {
@@ -1102,14 +1193,14 @@ private:
         it->setData(0, Qt::UserRole, f);
         it->setFlags(it->flags() & ~Qt::ItemIsDropEnabled);   // drops go between rows, never onto one
         it->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
-        it->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+        it->setTextAlignment(4, Qt::AlignRight | Qt::AlignVCenter);
         it->setText(0, QString::number(m_list->count() + 1));
         fillItem(it);
         m_list->addItem(it);
         queueTags(f);
     }
     void setRowBold(QTreeWidgetItem* it, bool bold) {
-        for (int c = 0; c < 4; c++) {
+        for (int c = 0; c < 5; c++) {
             QFont f = it->font(c);
             f.setBold(bold);
             it->setFont(c, f);
@@ -1141,13 +1232,13 @@ private:
         const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
         for (auto it = o.begin(); it != o.end(); ++it) {
             const QJsonObject t = it.value().toObject();
-            m_tags.insert(it.key(), Tag{t.value("a").toString(), t.value("t").toString(), t.value("d").toDouble(-1)});
+            m_tags.insert(it.key(), Tag{t.value("a").toString(), t.value("t").toString(), t.value("al").toString(), t.value("d").toDouble(-1)});
         }
     }
     void saveTags() {
         QJsonObject o;
         for (auto it = m_tags.begin(); it != m_tags.end(); ++it)
-            o.insert(it.key(), QJsonObject{{"a", it->artist}, {"t", it->title}, {"d", it->dur}});
+            o.insert(it.key(), QJsonObject{{"a", it->artist}, {"t", it->title}, {"al", it->album}, {"d", it->dur}});
         QFile f(tagCachePath());
         if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
     }
@@ -1189,6 +1280,7 @@ private:
                 t.artist = get("artist");
                 if (t.artist.isEmpty()) t.artist = get("album_artist");
                 t.title = get("title");
+                t.album = get("album");
                 t.dur = fmt.value("duration").toString().toDouble();
                 if (t.dur <= 0) t.dur = -1;
                 m_tags.insert(path, t);   // even an empty Tag: do not probe again
@@ -1209,7 +1301,7 @@ private:
                 m_tagRunning--;
             });
             pr->start("ffprobe", {"-v", "error", "-show_entries",
-                                  "format=duration:format_tags=artist,title,album_artist", "-of", "json", path});
+                                  "format=duration:format_tags=artist,title,album_artist,album", "-of", "json", path});
         }
     }
 

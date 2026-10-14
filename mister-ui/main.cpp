@@ -56,11 +56,10 @@ public:
         auto* lay = new QVBoxLayout(this);
         lay->setContentsMargins(0, 0, 0, 0);
         lay->setSpacing(2);
-        m_head = new QToolButton;
+        m_head = new QPushButton;
         m_head->setCheckable(true);
-        m_head->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        m_head->setAutoRaise(true);
-        m_head->setStyleSheet("QToolButton { text-align: left; padding: 4px 2px; }");
+        m_head->setFlat(true);
+        m_head->setStyleSheet("QPushButton { text-align: left; padding: 4px 2px; border: none; }");
         m_head->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         QFont f = m_head->font();
         f.setBold(true);
@@ -70,7 +69,7 @@ public:
         const bool o = set.value(key, open).toBool();
         m_head->setChecked(o);
         apply(title, o);
-        QObject::connect(m_head, &QToolButton::toggled, this, [this, title, &set, key](bool on) {
+        QObject::connect(m_head, &QPushButton::toggled, this, [this, title, &set, key](bool on) {
             set.setValue(key, on);
             apply(title, on);
             QTimer::singleShot(0, this, [this] {
@@ -84,7 +83,7 @@ private:
         m_head->setText((on ? "▾  " : "▸  ") + title);
         m_content->setVisible(on);
     }
-    QToolButton* m_head;
+    QPushButton* m_head;
     QWidget* m_content;
 };
 

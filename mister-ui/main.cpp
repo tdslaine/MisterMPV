@@ -106,10 +106,14 @@ public:
         m_subScale->setValue(m_set.value("subScale", 100).toInt());
         m_subScale->setToolTip("Text subtitle size (bitmap subs like PGS/DVD are not scalable).");
         m_subPos = new QSpinBox;
-        m_subPos->setRange(0, 150);
+        m_subPos->setRange(0, 100);
         m_subPos->setSuffix(" %");
         m_subPos->setValue(m_set.value("subPos", 100).toInt());
-        m_subPos->setToolTip("Vertical subtitle position: 100 = bottom of the picture, lower moves up, above 100 pushes them into the bottom black bar of letterboxed films.");
+        m_subPos->setToolTip("Vertical subtitle position: 100 = bottom of the screen, lower moves up.");
+        m_subBars = new QCheckBox("Subtitles in black bars");
+        m_subBars->setChecked(m_set.value("subBars", true).toBool());
+        m_subBars->setToolTip("Letterboxed films: put subtitles into the black bar below the picture "
+                              "instead of over it (also for styled ASS subtitles).");
         m_subColor = new QComboBox;
         m_subColor->addItems({"White", "Yellow", "Cyan", "Light green"});
         m_subColor->setCurrentIndex(m_set.value("subColor", 0).toInt());
@@ -203,6 +207,7 @@ public:
         tf->addRow("Subtitle size:", sliderRow(m_subScale));
         tf->addRow("Subtitle position:", sliderRow(m_subPos));
         tf->addRow("Subtitle colour:", m_subColor);
+        tf->addRow("", m_subBars);
 
         // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
         auto* picBox = new QGroupBox("Picture");
@@ -352,6 +357,7 @@ public:
         connect(m_subScale, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_subPos, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_subColor, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
+        connect(m_subBars, &QCheckBox::toggled, this, [this](bool) { applyView(); });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
             cmd({"set_property", "loop-file", on ? "inf" : "no"});
@@ -631,6 +637,8 @@ private:
                          "--sub-auto=fuzzy",
                          "--sub-scale=" + QString::number(m_subScale->value() / 100.0),
                          "--sub-pos=" + QString::number(m_subPos->value()),
+                         "--sub-use-margins=" + QString(m_subBars->isChecked() ? "yes" : "no"),
+                         "--sub-ass-force-margins=" + QString(m_subBars->isChecked() ? "yes" : "no"),
                          "--sub-color=" + subColorHex(),
                          "--sub-ass-style-overrides=" + subColorAss()};
         if (m_loop->isChecked()) a << "--loop-file=inf";
@@ -687,6 +695,9 @@ private:
         m_set.setValue("subScale", m_subScale->value());
         m_set.setValue("subPos", m_subPos->value());
         m_set.setValue("subColor", m_subColor->currentIndex());
+        m_set.setValue("subBars", m_subBars->isChecked());
+        cmd({"set_property", "sub-use-margins", m_subBars->isChecked()});
+        cmd({"set_property", "sub-ass-force-margins", m_subBars->isChecked()});
         cmd({"set_property", "sub-color", subColorHex()});
         cmd({"set_property", "sub-ass-style-overrides", subColorAss()});
         cmd({"set_property", "sub-pos", m_subPos->value()});
@@ -789,6 +800,7 @@ private:
     QSpinBox *m_hoff, *m_voff;
     QCheckBox* m_calib;
     QComboBox *m_core, *m_subColor, *m_scanStyle;
+    QCheckBox* m_subBars;
     QCheckBox* m_pad;
     QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;

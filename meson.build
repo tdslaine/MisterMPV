@@ -1,5 +1,5 @@
 project('mpv',
-        'c',
+        'c', 'cpp',
         license: ['GPL2+', 'LGPL2.1+'],
         version: files('./MPV_VERSION'),
         meson_version: '>=1.3.0',
@@ -53,6 +53,15 @@ features = {
 
 
 # generic sources
+# MiSTer (GroovyNLC) output: groovy-mister-zig static library from the MiSTerCast checkout.
+gmz_dir = get_option('mister-gmz-dir')
+if gmz_dir == ''
+    gmz_dir = meson.project_source_root() / '../MiSTerCast/groovy-mister-zig'
+endif
+gmz_lib = meson.get_compiler('c').find_library('groovy-mister-zig', dirs: [gmz_dir / 'zig-out/lib'], static: true)
+dependencies += [gmz_lib, declare_dependency(compile_args: ['-I' + gmz_dir / 'include'],
+                                             link_args: ['-lstdc++'])]
+
 sources = files(
     ## Audio
     'audio/aframe.c',
@@ -73,6 +82,7 @@ sources = files(
     'audio/out/ao_lavc.c',
     'audio/out/ao_null.c',
     'audio/out/ao_pcm.c',
+    'audio/out/ao_mister.c',
     'audio/out/buffer.c',
 
     ## Core
@@ -244,6 +254,9 @@ sources = files(
     'video/out/vo_lavc.c',
     'video/out/vo_libmpv.c',
     'video/out/vo_null.c',
+    'video/out/vo_mister.c',
+    'video/out/mister_conn.c',
+    'video/out/nlc_codec.cpp',
     'video/out/vo_tct.c',
     'video/out/vo_kitty.c',
     'video/out/win_state.c',

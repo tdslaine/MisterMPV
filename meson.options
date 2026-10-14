@@ -124,3 +124,5 @@ option('win32-subsystem', type : 'string', value: 'windows', description : 'Wind
 option('html-build', type: 'feature', value: 'disabled', description: 'HTML manual generation')
 option('manpage-build', type: 'feature', value: 'auto', description: 'manpage generation')
 option('pdf-build', type: 'feature', value: 'disabled', description: 'PDF manual generation')
+
+option('mister-gmz-dir', type: 'string', value: '', description: 'Path to groovy-mister-zig (default: ../MiSTerCast/groovy-mister-zig)')

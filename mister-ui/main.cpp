@@ -47,6 +47,47 @@
 
 #include "modeline_keys.h"
 
+// Collapsible section: a flat header button (arrow + title) above a content widget; the state is
+// remembered in QSettings and the window follows the new height.
+class Section : public QWidget {
+public:
+    Section(const QString& title, QWidget* content, QSettings& set, const QString& key, bool open)
+        : m_content(content) {
+        auto* lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        m_head = new QToolButton;
+        m_head->setCheckable(true);
+        m_head->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        m_head->setAutoRaise(true);
+        m_head->setStyleSheet("QToolButton { text-align: left; padding: 4px 2px; }");
+        m_head->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        QFont f = m_head->font();
+        f.setBold(true);
+        m_head->setFont(f);
+        lay->addWidget(m_head);
+        lay->addWidget(content);
+        const bool o = set.value(key, open).toBool();
+        m_head->setChecked(o);
+        apply(title, o);
+        QObject::connect(m_head, &QToolButton::toggled, this, [this, title, &set, key](bool on) {
+            set.setValue(key, on);
+            apply(title, on);
+            QTimer::singleShot(0, this, [this] {
+                QWidget* w = window();
+                if (w && !w->isMaximized()) w->resize(w->width(), w->sizeHint().height());
+            });
+        });
+    }
+private:
+    void apply(const QString& title, bool on) {
+        m_head->setText((on ? "▾  " : "▸  ") + title);
+        m_content->setVisible(on);
+    }
+    QToolButton* m_head;
+    QWidget* m_content;
+};
+
 class Window : public QWidget {
 public:
     Window() {
@@ -376,8 +417,10 @@ public:
         root->addSpacing(14);        // air between the transport buttons and the playlist
         root->addWidget(plBox, 1);
         root->addWidget(outBox);
-        root->addWidget(trackBox);
-        root->addWidget(picBox);
+        trackBox->setTitle(QString());
+        root->addWidget(new Section("Audio / Subtitles", trackBox, m_set, "secAudio", false));
+        picBox->setTitle(QString());
+        root->addWidget(new Section("Picture", picBox, m_set, "secPicture", false));
         setMinimumWidth(720);
         setControlsEnabled(false);
 

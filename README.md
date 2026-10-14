@@ -1,7 +1,7 @@
 # misterMPV
 
 A media player for the CRT on your MiSTer: [mpv](https://mpv.io) with a video and audio output that streams to a
-MiSTer FPGA running the GroovyNLC core, plus a Winamp-style control window.
+MiSTer FPGA running the [GroovyNLC core](https://github.com/verbst/Groovy_MiSTer), plus a Winamp-style control window.
 
 [![mpv 0.41](https://img.shields.io/badge/based%20on-mpv%200.41-8a2be2)](https://mpv.io)
 [![GroovyNLC core](https://img.shields.io/badge/MiSTer-GroovyNLC%20core-2ea44f)](https://github.com/verbst/Groovy_MiSTer)
@@ -17,22 +17,26 @@ on the TV.
 ## Contents
 
 1. [Requirements](#requirements)
-2. [Installation](#installation)
-3. [First start](#first-start)
-4. [Using the player](#using-the-player)
-5. [Features](#features)
-6. [Screenshots](#screenshots)
-7. [How it works](#how-it-works)
-8. [Repository layout](#repository-layout)
-9. [FAQ](#faq)
-10. [Documentation, credits, license](#documentation-credits-license)
+2. [Prepare the MiSTer: the GroovyNLC core](#prepare-the-mister-the-groovynlc-core)
+3. [Installation](#installation)
+4. [First start](#first-start)
+5. [Using the player](#using-the-player)
+6. [Features](#features)
+7. [Screenshots](#screenshots)
+8. [How it works](#how-it-works)
+9. [Repository layout](#repository-layout)
+10. [FAQ](#faq)
+11. [Documentation, credits, license](#documentation-credits-license)
 
 ## Requirements
 
 **On the MiSTer**
 
-- The GroovyNLC core (`/media/fat/_Utility/GroovyNLC_*.rbf`) and a CRT on the analog output.
-- Core OSD: *Volatile framebuffer = Off*, *CRT scale = Off*.
+- The **GroovyNLC core** by verbst, installed as described in the next section. It is **essential**: without it there is
+  nothing on the MiSTer that can receive the stream. Project and downloads:
+  **[github.com/verbst/Groovy_MiSTer](https://github.com/verbst/Groovy_MiSTer)** (releases:
+  [verbst/Groovy_MiSTer/releases](https://github.com/verbst/Groovy_MiSTer/releases)).
+- A CRT on the analog output, and Gigabit Ethernet between the PC and the MiSTer (a switch is fine, Wi-Fi is not).
 
 **On the PC** (Linux, same LAN as the MiSTer)
 
@@ -42,6 +46,34 @@ on the TV.
 
 Only one program may stream to the MiSTer at a time. Close MiSTerCast, RetroArch, `mister-groovy-relay` or another mpv
 first, otherwise the picture stalls.
+
+## Prepare the MiSTer: the GroovyNLC core
+
+misterMPV only talks to the **GroovyNLC** core, a fork of psakhis' Groovy core that adds the near-lossless NLC codec (what
+makes 480i/480p stable over Ethernet). The original **Groovy** core ([psakhis/Groovy_MiSTer](https://github.com/psakhis/Groovy_MiSTer))
+cannot decode NLC. Everything below is summarised from the core's own
+[README](https://github.com/verbst/Groovy_MiSTer#install); check it for newer versions and details.
+
+1. Download the latest release from
+   [verbst/Groovy_MiSTer/releases](https://github.com/verbst/Groovy_MiSTer/releases). Copy `GroovyNLC_*.rbf` to
+   `/media/fat/_Utility` and `MiSTer_groovyNLC` to `/media/fat` (FTP: binary mode).
+2. Add this to `/media/fat/MiSTer.ini` (the section name must be `GroovyNLC`, the core's name, not the file name):
+
+   ```ini
+   [GroovyNLC]
+   main=MiSTer_groovyNLC
+   ```
+
+3. Start the core from the `_Utility` menu. A bouncing logo means it is running and waiting for a client. (Later you
+   can start it from misterMPV with **Launch core**, which loads the newest `GroovyNLC_*.rbf` over SSH.)
+4. In the core's OSD set **Volatile framebuffer = Off** (required for NLC) and **CRT scale = Off**.
+
+The core listens on UDP **32100** (video, audio, control) and **32101** (controller). Give the PC and the MiSTer static IP
+addresses. If the picture stays black or garbled, the core's troubleshooting section lists the usual causes (old
+`MiSTer_groovyNLC` binary, Volatile framebuffer on, ...).
+
+Related projects you might know: [verbst/MiSTerCast](https://github.com/verbst/MiSTerCast) (Windows desktop mirroring
+with NLC) and [verbst/RetroArch](https://github.com/verbst/RetroArch) (RetroArch with a native MiSTer output).
 
 ## Installation
 

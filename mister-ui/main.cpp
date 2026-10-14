@@ -199,12 +199,12 @@ public:
                           "B1/Start: pause, B2: stop, B3: audio track, B4: subtitle track\n"
                           "L1/R1: previous/next, L2/R2: seek 60 s, Select: status on TV\n"
                           "(applies on the next Play)");
-        misterRow->addWidget(m_pad);
         misterRow->addWidget(sshBtn);
         og->addLayout(misterRow, 3, 0, 1, 4);
         connect(testBtn, &QPushButton::clicked, this, [this] { testConnection(); });
         connect(coreBtn, &QPushButton::clicked, this, [this] { launchCore(); });
         connect(sshBtn, &QPushButton::clicked, this, [this] { sshDialog(); });
+        buildSetupDialog();
         og->setColumnStretch(1, 1);
         og->setColumnStretch(3, 1);
 
@@ -215,9 +215,6 @@ public:
         tf->addRow("Subtitles:", m_sub);
         tf->addRow("Subtitle size:", sliderRow(m_subScale));
         tf->addRow("Subtitle position:", sliderRow(m_subPos));
-        tf->addRow("Subtitle colour:", m_subColor);
-        tf->addRow("", m_subBars);
-        tf->addRow("OSD text size:", sliderRow(m_osdSize));
 
         // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
         auto* picBox = new QGroupBox("Picture");
@@ -262,17 +259,6 @@ public:
         auto* seekRow = new QHBoxLayout;
         seekRow->addWidget(m_seek, 1);
         seekRow->addWidget(m_time);
-        m_goto = new QLineEdit;
-        m_goto->setPlaceholderText("go to  h:mm:ss");
-        m_goto->setMaximumWidth(120);
-        m_goto->setToolTip("Type a position (ss, mm:ss or h:mm:ss) and press Enter to jump there");
-        seekRow->addWidget(m_goto);
-        connect(m_goto, &QLineEdit::returnPressed, this, [this] {
-            double sec = 0;
-            for (const QString& part : m_goto->text().trimmed().split(':')) sec = sec * 60 + part.toDouble();
-            if (sec >= 0 && !m_goto->text().trimmed().isEmpty()) cmd({"seek", sec, "absolute"});
-            m_goto->clear();
-        });
 
         m_loop = new QCheckBox("Loop");
         m_play = new QPushButton("▶ Play");
@@ -545,53 +531,83 @@ private:
     static inline const QString kDefaultNlcCore = "/media/fat/_Utility/GroovyNLC_*.rbf";
     static inline const QString kDefaultOrigCore = "/media/fat/_Utility/Groovy_*.rbf";
 
-    void sshDialog() {
-        QDialog d(this);
-        d.setWindowTitle("MiSTer setup");
-        auto* f = new QFormLayout(&d);
-        auto* u = new QLineEdit(m_set.value("sshUser", "root").toString());
-        auto* pw = new QLineEdit(m_set.value("sshPass", "1").toString());
-        pw->setEchoMode(QLineEdit::Password);
-        pw->setToolTip("Stored unencrypted in the settings file (MiSTer default: root / 1).");
-        auto* port = new QSpinBox;
-        port->setRange(1, 65535);
-        port->setValue(m_set.value("sshPort", 22).toInt());
-        auto* core = new QLineEdit(m_set.value("corePathNlc", kDefaultNlcCore).toString());
-        core->setToolTip("File (or glob) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
-        auto* coreOrig = new QLineEdit(m_set.value("corePathOrig", kDefaultOrigCore).toString());
-        coreOrig->setToolTip("File (or glob) of the original Groovy core; the newest match is loaded.");
-        auto* colorOrder = new QComboBox;
-        colorOrder->addItems({"BGR (default - what the Groovy core expects)", "RGB"});
-        colorOrder->setCurrentIndex(m_set.value("colorOrder", 0).toInt());
-        colorOrder->setToolTip("Channel order sent to the MiSTer. If skin tones look blue (or red tinted), "
-                               "flip it. Applies on the next Play.");
-        f->addRow("Colour order:", colorOrder);
-        f->addRow("SSH user:", u);
-        f->addRow("SSH password:", pw);
-        f->addRow("SSH port:", port);
-        f->addRow("GroovyNLC core:", core);
-        f->addRow("Groovy core (original):", coreOrig);
-        f->addRow(new QLabel("Streaming uses UDP 32100 (fixed by the Groovy core)."));
+    // Persistent "Setup" dialog: rarely changed things live here instead of the main window.
+    // Live widgets (OSD size, subtitle colour, ...) apply immediately; the rest on Save.
+    void buildSetupDialog() {
+        m_setupDlg = new QDialog(this);
+        m_setupDlg->setWindowTitle("misterMPV setup");
+        auto* lay = new QVBoxLayout(m_setupDlg);
+
+        auto* disp = new QGroupBox("Display");
+        auto* df = new QFormLayout(disp);
+        df->addRow("OSD text size:", sliderRow(m_osdSize));
+        df->addRow("Subtitle colour:", m_subColor);
+        df->addRow("", m_subBars);
+        m_colorOrder = new QComboBox;
+        m_colorOrder->addItems({"BGR (default - what the Groovy core expects)", "RGB"});
+        m_colorOrder->setToolTip("Channel order sent to the MiSTer. If skin tones look blue (or red tinted), "
+                                 "flip it. Applies on the next Play.");
+        df->addRow("Colour order:", m_colorOrder);
+        lay->addWidget(disp);
+
+        auto* ctl = new QGroupBox("Control");
+        auto* cl = new QVBoxLayout(ctl);
+        cl->addWidget(m_pad);
+        lay->addWidget(ctl);
+
+        auto* ssh = new QGroupBox("MiSTer login (for \"Launch core\")");
+        auto* sf = new QFormLayout(ssh);
+        m_sshUser = new QLineEdit;
+        m_sshPass = new QLineEdit;
+        m_sshPass->setEchoMode(QLineEdit::Password);
+        m_sshPass->setToolTip("Stored unencrypted in the settings file (MiSTer default: root / 1).");
+        m_sshPort = new QSpinBox;
+        m_sshPort->setRange(1, 65535);
+        m_coreNlc = new QLineEdit;
+        m_coreNlc->setToolTip("File (or glob) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
+        m_coreOrig = new QLineEdit;
+        m_coreOrig->setToolTip("File (or glob) of the original Groovy core; the newest match is loaded.");
+        sf->addRow("SSH user:", m_sshUser);
+        sf->addRow("SSH password:", m_sshPass);
+        sf->addRow("SSH port:", m_sshPort);
+        sf->addRow("GroovyNLC core:", m_coreNlc);
+        sf->addRow("Groovy core (original):", m_coreOrig);
+        sf->addRow(new QLabel("Streaming uses UDP 32100 (fixed by the Groovy core)."));
+        lay->addWidget(ssh);
+
         auto* btns = new QHBoxLayout;
         auto* defaults = new QPushButton("Defaults");
         auto* ok = new QPushButton("Save");
         btns->addWidget(defaults);
         btns->addStretch(1);
         btns->addWidget(ok);
-        f->addRow(btns);
-        connect(defaults, &QPushButton::clicked, &d, [=] {
-            colorOrder->setCurrentIndex(0); u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultNlcCore); coreOrig->setText(kDefaultOrigCore);
+        lay->addLayout(btns);
+        connect(defaults, &QPushButton::clicked, m_setupDlg, [this] {
+            m_colorOrder->setCurrentIndex(0); m_sshUser->setText("root"); m_sshPass->setText("1");
+            m_sshPort->setValue(22); m_coreNlc->setText(kDefaultNlcCore); m_coreOrig->setText(kDefaultOrigCore);
+            m_osdSize->setValue(28); m_subColor->setCurrentIndex(0); m_subBars->setChecked(true); m_pad->setChecked(true);
         });
-        connect(ok, &QPushButton::clicked, &d, &QDialog::accept);
-        d.setMinimumWidth(440);
-        if (d.exec() == QDialog::Accepted) {
-            m_set.setValue("colorOrder", colorOrder->currentIndex());
-            m_set.setValue("sshUser", u->text().trimmed());
-            m_set.setValue("sshPass", pw->text());
-            m_set.setValue("sshPort", port->value());
-            m_set.setValue("corePathNlc", core->text().trimmed());
-            m_set.setValue("corePathOrig", coreOrig->text().trimmed());
-        }
+        connect(ok, &QPushButton::clicked, m_setupDlg, &QDialog::accept);
+        connect(m_setupDlg, &QDialog::accepted, this, [this] {
+            m_set.setValue("colorOrder", m_colorOrder->currentIndex());
+            m_set.setValue("sshUser", m_sshUser->text().trimmed());
+            m_set.setValue("sshPass", m_sshPass->text());
+            m_set.setValue("sshPort", m_sshPort->value());
+            m_set.setValue("corePathNlc", m_coreNlc->text().trimmed());
+            m_set.setValue("corePathOrig", m_coreOrig->text().trimmed());
+            m_set.setValue("pad", m_pad->isChecked());
+        });
+        m_setupDlg->setMinimumWidth(480);
+    }
+
+    void sshDialog() {   // "Setup…" button: reload the stored values, then show
+        m_colorOrder->setCurrentIndex(m_set.value("colorOrder", 0).toInt());
+        m_sshUser->setText(m_set.value("sshUser", "root").toString());
+        m_sshPass->setText(m_set.value("sshPass", "1").toString());
+        m_sshPort->setValue(m_set.value("sshPort", 22).toInt());
+        m_coreNlc->setText(m_set.value("corePathNlc", kDefaultNlcCore).toString());
+        m_coreOrig->setText(m_set.value("corePathOrig", kDefaultOrigCore).toString());
+        m_setupDlg->exec();
     }
 
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
@@ -842,6 +858,10 @@ private:
     QCheckBox* m_subBars;
     bool m_syncing = false;
     QCheckBox* m_pad;
+    QDialog* m_setupDlg;
+    QComboBox* m_colorOrder;
+    QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
+    QSpinBox* m_sshPort;
     QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
     QListWidget* m_list;
@@ -849,7 +869,6 @@ private:
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
     QLabel *m_time, *m_status;
-    QLineEdit* m_goto;
     QPushButton *m_play, *m_pause;
     QProcess m_proc;
     QProcess m_ssh;

@@ -106,10 +106,14 @@ public:
         m_subScale->setValue(m_set.value("subScale", 100).toInt());
         m_subScale->setToolTip("Text subtitle size (bitmap subs like PGS/DVD are not scalable).");
         m_subPos = new QSpinBox;
-        m_subPos->setRange(0, 100);
+        m_subPos->setRange(0, 150);
         m_subPos->setSuffix(" %");
         m_subPos->setValue(m_set.value("subPos", 100).toInt());
-        m_subPos->setToolTip("Vertical subtitle position: 100 = bottom, lower values move them up.");
+        m_subPos->setToolTip("Vertical subtitle position: 100 = bottom of the picture, lower moves up, above 100 pushes them into the bottom black bar of letterboxed films.");
+        m_subColor = new QComboBox;
+        m_subColor->addItems({"White", "Yellow", "Cyan", "Light green"});
+        m_subColor->setCurrentIndex(m_set.value("subColor", 0).toInt());
+        m_subColor->setToolTip("Colour of text subtitles (SRT/ASS). Bitmap subtitles (DVD/PGS) cannot be recoloured.");
         auto mkSpin = [this](const char* key, int lo, int hi, int def, const char* suffix) {
             auto* s = new QSpinBox;
             s->setRange(lo, hi);
@@ -137,6 +141,12 @@ public:
         connect(calReset, &QPushButton::clicked, this, [this] {
             m_hsize->setValue(100); m_vsize->setValue(100); m_hoff->setValue(0); m_voff->setValue(0);
         });
+        m_scanStyle = new QComboBox;
+        m_scanStyle->addItems({"Line (every 2nd row)", "Thin (every 3rd row)",
+                               "Bright lines (dark + boosted)", "RGB mask (columns)"});
+        m_scanStyle->setCurrentIndex(m_set.value("scanStyle", 0).toInt());
+        m_scanStyle->setToolTip("Pattern the Scanlines strength is applied with. At 240p try Thin, "
+                                "Bright lines or RGB mask if the standard lines look blurry.");
         m_aspect = new QComboBox;
         m_aspect->addItems({"Auto (keep aspect, bars)", "Stretch (fill screen)", "Zoom (crop to fill)",
                             "Force 4:3", "Force 16:9", "Force 21:9"});
@@ -192,6 +202,7 @@ public:
         tf->addRow("Subtitles:", m_sub);
         tf->addRow("Subtitle size:", sliderRow(m_subScale));
         tf->addRow("Subtitle position:", sliderRow(m_subPos));
+        tf->addRow("Subtitle colour:", m_subColor);
 
         // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
         auto* picBox = new QGroupBox("Picture");
@@ -201,6 +212,7 @@ public:
         pf->addRow("Saturation:", sliderRow(m_sat));
         pf->addRow("Black level:", sliderRow(m_blk));
         pf->addRow("Scanlines:", sliderRow(m_scn));
+        pf->addRow("Scanline style:", m_scanStyle);
         auto* picBtns = new QHBoxLayout;
         auto* picReset = new QPushButton("Reset colours");
         auto* calBtn = new QPushButton("CRT calibration…");
@@ -235,6 +247,17 @@ public:
         auto* seekRow = new QHBoxLayout;
         seekRow->addWidget(m_seek, 1);
         seekRow->addWidget(m_time);
+        m_goto = new QLineEdit;
+        m_goto->setPlaceholderText("go to  h:mm:ss");
+        m_goto->setMaximumWidth(120);
+        m_goto->setToolTip("Type a position (ss, mm:ss or h:mm:ss) and press Enter to jump there");
+        seekRow->addWidget(m_goto);
+        connect(m_goto, &QLineEdit::returnPressed, this, [this] {
+            double sec = 0;
+            for (const QString& part : m_goto->text().trimmed().split(':')) sec = sec * 60 + part.toDouble();
+            if (sec >= 0 && !m_goto->text().trimmed().isEmpty()) cmd({"seek", sec, "absolute"});
+            m_goto->clear();
+        });
 
         m_loop = new QCheckBox("Loop");
         m_play = new QPushButton("▶ Play");
@@ -325,8 +348,10 @@ public:
         connect(m_calib, &QCheckBox::toggled, this, [this](bool) { applyView(); });
         for (auto* s : {m_bri, m_con, m_sat, m_blk, m_scn})
             connect(s, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
+        connect(m_scanStyle, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_subScale, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_subPos, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
+        connect(m_subColor, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
             cmd({"set_property", "loop-file", on ? "inf" : "no"});
@@ -605,7 +630,9 @@ private:
                          "--input-ipc-server=" + m_sockPath, "--no-terminal", "--idle=no",
                          "--sub-auto=fuzzy",
                          "--sub-scale=" + QString::number(m_subScale->value() / 100.0),
-                         "--sub-pos=" + QString::number(m_subPos->value())};
+                         "--sub-pos=" + QString::number(m_subPos->value()),
+                         "--sub-color=" + subColorHex(),
+                         "--sub-ass-style-overrides=" + subColorAss()};
         if (m_loop->isChecked()) a << "--loop-file=inf";
         if (m_loopPl->isChecked()) a << "--loop-playlist=inf";
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
@@ -645,10 +672,23 @@ private:
             cmd({"observe_property", id++, p});
     }
 
+    // index: 0 white, 1 yellow, 2 cyan, 3 light green
+    QString subColorHex() const {
+        static const char* c[] = {"#FFFFFF", "#FFFF00", "#00FFFF", "#80FF80"};
+        return c[m_subColor->currentIndex()];
+    }
+    QString subColorAss() const {   // ASS wants &HBBGGRR&; white = leave the styles alone
+        static const char* c[] = {"", "PrimaryColour=&H0000FFFF&", "PrimaryColour=&H00FFFF00&", "PrimaryColour=&H0080FF80&"};
+        return c[m_subColor->currentIndex()];
+    }
+
     // Live picture settings (sub size + aspect/format), also re-sent on every (re)connect.
     void applyView() {
         m_set.setValue("subScale", m_subScale->value());
         m_set.setValue("subPos", m_subPos->value());
+        m_set.setValue("subColor", m_subColor->currentIndex());
+        cmd({"set_property", "sub-color", subColorHex()});
+        cmd({"set_property", "sub-ass-style-overrides", subColorAss()});
         cmd({"set_property", "sub-pos", m_subPos->value()});
         m_set.setValue("aspect", m_aspect->currentIndex());
         cmd({"set_property", "sub-scale", m_subScale->value() / 100.0});
@@ -661,6 +701,8 @@ private:
         cmd({"set_property", "saturation", m_sat->value()});
         cmd({"set_property", "mister-blacklevel", m_blk->value()});
         cmd({"set_property", "mister-scanlines", m_scn->value()});
+        m_set.setValue("scanStyle", m_scanStyle->currentIndex());
+        cmd({"set_property", "mister-scanstyle", m_scanStyle->currentIndex()});
         m_set.setValue("hsize", m_hsize->value());
         m_set.setValue("vsize", m_vsize->value());
         m_set.setValue("hoffset", m_hoff->value());
@@ -684,6 +726,8 @@ private:
 
     static QString fmt(double s) {
         const int t = int(s);
+        if (t >= 3600)
+            return QString("%1:%2:%3").arg(t / 3600).arg(t / 60 % 60, 2, 10, QChar('0')).arg(t % 60, 2, 10, QChar('0'));
         return QString("%1:%2").arg(t / 60).arg(t % 60, 2, 10, QChar('0'));
     }
 
@@ -700,7 +744,8 @@ private:
                 m_duration = v.toDouble();
             } else if (n == "time-pos" && !v.isNull()) {
                 const double t = v.toDouble();
-                m_time->setText(fmt(t) + " / " + fmt(m_duration));
+                m_time->setText(fmt(t) + " / " + fmt(m_duration) +
+                                (m_duration > 0 ? "  (-" + fmt(m_duration - t) + ")" : QString()));
                 if (m_duration > 0 && !m_seek->isSliderDown()) {
                     const QSignalBlocker b(m_seek);
                     m_seek->setValue(int(t / m_duration * 1000));
@@ -743,7 +788,7 @@ private:
     QDoubleSpinBox *m_hsize, *m_vsize;
     QSpinBox *m_hoff, *m_voff;
     QCheckBox* m_calib;
-    QComboBox* m_core;
+    QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_pad;
     QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
@@ -752,6 +797,7 @@ private:
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
     QLabel *m_time, *m_status;
+    QLineEdit* m_goto;
     QPushButton *m_play, *m_pause;
     QProcess m_proc;
     QProcess m_ssh;

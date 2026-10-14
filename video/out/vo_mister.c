@@ -66,7 +66,7 @@ static void update_fx(struct vo *vo)
     m_config_cache_update(p->fx);
     const struct mister_fx_opts *f = p->fx->opts;
     mister_set_fx(cp.brightness * 100.0, (cp.contrast - 1.0) * 100.0,
-                  (cp.saturation - 1.0) * 100.0, f->blacklevel, f->scanlines);
+                  (cp.saturation - 1.0) * 100.0, f->blacklevel, f->scanlines, f->scanstyle);
     update_geometry(vo);
 }
 

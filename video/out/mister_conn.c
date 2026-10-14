@@ -48,7 +48,7 @@ static struct {
     atomic_bool stop;
     atomic_int bff;              // 1 = bottom field first
     atomic_int flicker;          // 0 off, 1 light, 2 full
-    atomic_int fx_bri, fx_con, fx_sat, fx_blk, fx_scn;  // levels, x100, x100, levels, percent
+    atomic_int fx_bri, fx_con, fx_sat, fx_blk, fx_scn, fx_scs;  // levels, x100, x100, levels, percent
 } G = { .lock = PTHREAD_MUTEX_INITIALIZER, .gmz_lock = PTHREAD_MUTEX_INITIALIZER,
         .frame_lock = PTHREAD_MUTEX_INITIALIZER,
         .fx_con = 100, .fx_sat = 100 };
@@ -58,6 +58,7 @@ const struct m_sub_options mister_fx_conf = {
     .opts = (const m_option_t[]) {
         {"mister-blacklevel", OPT_INT(blacklevel), M_RANGE(0, 30)},
         {"mister-scanlines", OPT_INT(scanlines), M_RANGE(0, 100)},
+        {"mister-scanstyle", OPT_INT(scanstyle), M_RANGE(0, 3)},
         {"mister-hsize", OPT_DOUBLE(hsize), M_RANGE(80, 100)},
         {"mister-vsize", OPT_DOUBLE(vsize), M_RANGE(80, 100)},
         {"mister-hoffset", OPT_INT(hoffset), M_RANGE(-72, 72)},
@@ -70,8 +71,10 @@ const struct m_sub_options mister_fx_conf = {
     .change_flags = UPDATE_VIDEO,
 };
 
-void mister_set_fx(double brightness, double contrast, double saturation, int black, int scanlines)
+void mister_set_fx(double brightness, double contrast, double saturation, int black, int scanlines,
+                   int scanstyle)
 {
+    atomic_store(&G.fx_scs, scanstyle);
     atomic_store(&G.fx_bri, (int)lround(brightness * 1.28));          // +-100 -> +-128 levels
     atomic_store(&G.fx_con, (int)lround(contrast + 100.0));           // x100 factor
     atomic_store(&G.fx_sat, (int)lround(saturation + 100.0));         // x100 factor
@@ -89,6 +92,7 @@ static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
     const int bri = atomic_load(&G.fx_bri), con = atomic_load(&G.fx_con);
     const int blk = atomic_load(&G.fx_blk), sat = atomic_load(&G.fx_sat);
     const int scn = atomic_load(&G.fx_scn);
+    const int scs = atomic_load(&G.fx_scs);
     if (lut_key[0] != bri || lut_key[1] != con || lut_key[2] != blk) {
         for (int v = 0; v < 256; v++) {          // black level -> brightness -> contrast
             int x = clamp8(v + blk);
@@ -99,11 +103,17 @@ static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
         lut_key[0] = bri; lut_key[1] = con; lut_key[2] = blk;
     }
     const float sf = sat / 100.0f;
-    const float dark = 1.0f - scn / 100.0f;
+    const float dark = scs == 3 ? 1.0f - scn / 150.0f : 1.0f - scn / 100.0f;
+    const float boost = 1.0f + scn / 100.0f * 0.35f;
     for (int y = 0; y < h; y++) {
         const uint8_t *s = src + (size_t)y * w * 3;
         uint8_t *d = dst + (size_t)y * w * 3;
-        const bool line = (y & 1) && scn > 0;
+        // rows: styles 0-2 darken a row, style 2 also lifts the other rows
+        bool line = false, lift = false;
+        if (scn > 0) {
+            if (scs == 0 || scs == 2) { line = y & 1; lift = scs == 2 && !(y & 1); }
+            else if (scs == 1) line = (y % 3) == 2;
+        }
         for (int x = 0; x < w; x++, s += 3, d += 3) {
             int b = lut[s[0]], g = lut[s[1]], r = lut[s[2]];   // wire order is B,G,R
             if (sat != 100) {
@@ -113,6 +123,13 @@ static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
                 b = clamp8((int)(l + (b - l) * sf));
             }
             if (line) { r = (int)(r * dark); g = (int)(g * dark); b = (int)(b * dark); }
+            else if (lift) { r = clamp8((int)(r * boost)); g = clamp8((int)(g * boost)); b = clamp8((int)(b * boost)); }
+            else if (scn > 0 && scs == 3) {   // each column favours one phosphor colour
+                const int c = x % 3;
+                if (c != 0) r = (int)(r * dark);
+                if (c != 1) g = (int)(g * dark);
+                if (c != 2) b = (int)(b * dark);
+            }
             d[0] = (uint8_t)b; d[1] = (uint8_t)g; d[2] = (uint8_t)r;
         }
     }

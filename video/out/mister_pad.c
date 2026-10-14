@@ -43,7 +43,7 @@ static void feed(struct mp_input_src *src, const char *cmd)
 
 static const char STATUS[] =
     "show-text \"${?playlist-count:${playlist-pos-1}/${playlist-count}  }${media-title}\\n"
-    "${time-pos} / ${duration}${?pause==yes:  (paused)}\\n"
+    "${time-pos} / ${duration}  (-${time-remaining})${?pause==yes:  (paused)}\\n"
     "Audio: ${current-tracks/audio/lang:?} ${current-tracks/audio/title:}\\n"
     "Subs: ${current-tracks/sub/lang:off} ${current-tracks/sub/title:}\" 5000";
 

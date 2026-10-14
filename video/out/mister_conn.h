@@ -25,7 +25,10 @@ void mister_release(void);
 // Picture adjustments applied to every frame the sender transmits (live, also while paused).
 // Same maths as MiSTerCast's applyColorFx. brightness/contrast/saturation use mpv's
 // -100..100 scale (0 = neutral); black 0..30 lifts blacks; scanlines 0..100 % darkens odd rows.
-void mister_set_fx(double brightness, double contrast, double saturation, int black, int scanlines);
+// scanstyle: 0 = dark odd rows (1:2), 1 = dark every 3rd row, 2 = dark odd rows + bright even rows,
+// 3 = RGB phosphor mask (columns).
+void mister_set_fx(double brightness, double contrast, double saturation, int black, int scanlines,
+                   int scanstyle);
 
 // Global options --mister-blacklevel / --mister-scanlines (registered in options.c so they are
 // settable at runtime over IPC like brightness/contrast/saturation).
@@ -33,6 +36,7 @@ struct m_sub_options;
 struct mister_fx_opts {
     int blacklevel;
     int scanlines;
+    int scanstyle;
     double hsize, vsize;      // CRT picture size, % of the raster (80..100)
     int hoffset, voffset;     // CRT picture shift: pixels / raster lines (field lines when interlaced)
     bool calibrate;           // show the calibration test pattern instead of the video

@@ -41,6 +41,9 @@
 #include <QUrl>
 #include <QDirIterator>
 #include <QListWidget>
+#include <QTreeWidget>
+#include <QSet>
+#include <QHeaderView>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QLineEdit>
@@ -95,6 +98,20 @@ private:
     QWidget* m_content;
 };
 
+// Playlist table (# | Artist | Title | Time). A QTreeWidget with a few QListWidget-style helpers so the
+// rest of the code can treat the top-level items as rows.
+class PlaylistView : public QTreeWidget {
+public:
+    using QTreeWidget::QTreeWidget;
+    int count() const { return topLevelItemCount(); }
+    QTreeWidgetItem* item(int i) const { return topLevelItem(i); }
+    int row(const QTreeWidgetItem* it) const { return indexOfTopLevelItem(const_cast<QTreeWidgetItem*>(it)); }
+    QTreeWidgetItem* takeItem(int r) { return takeTopLevelItem(r); }
+    void addItem(QTreeWidgetItem* it) { addTopLevelItem(it); }
+    int currentRow() const { const QModelIndex i = currentIndex(); return i.isValid() ? i.row() : -1; }
+    void setCurrentRow(int r) { if (auto* it = topLevelItem(r)) setCurrentItem(it); }
+};
+
 class Window : public QWidget {
 public:
     Window() {
@@ -115,12 +132,36 @@ public:
         fileRow->addWidget(m_file);
         fileRow->addWidget(addUrl);
 
-        m_list = new QListWidget;
+        m_list = new PlaylistView;
         m_list->setMinimumHeight(110);
+        m_list->setColumnCount(4);
+        m_list->setHeaderLabels({"#", "Artist", "Title", "Time"});
+        m_list->setRootIsDecorated(false);
+        m_list->setItemsExpandable(false);
+        m_list->setUniformRowHeights(true);
+        m_list->setAlternatingRowColors(true);
+        m_list->setTextElideMode(Qt::ElideRight);
         m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
-        m_list->setToolTip("Playlist - double-click to play an entry, drag to reorder");
+        m_list->setToolTip("Playlist - double-click to play, drag to reorder, click a column header to sort");
         m_list->setDragDropMode(QAbstractItemView::InternalMove);
         m_list->setDefaultDropAction(Qt::MoveAction);
+        m_list->setStyleSheet("QTreeView { alternate-background-color: rgba(128, 128, 128, 34); }");
+        {
+            QHeaderView* h = m_list->header();
+            h->setStretchLastSection(false);
+            h->setSectionsClickable(true);
+            h->setSortIndicatorShown(true);
+            h->setSortIndicator(-1, Qt::AscendingOrder);
+            h->setSectionResizeMode(0, QHeaderView::Fixed);
+            h->setSectionResizeMode(1, QHeaderView::Interactive);
+            h->setSectionResizeMode(2, QHeaderView::Stretch);
+            h->setSectionResizeMode(3, QHeaderView::Fixed);
+            m_list->setColumnWidth(0, 56);
+            m_list->setColumnWidth(1, 190);
+            m_list->setColumnWidth(3, 68);
+            m_list->headerItem()->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
+            m_list->headerItem()->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+        }
         auto* plRow = new QHBoxLayout;
         auto* plPrev = new QPushButton("◀◀  Prev");
         auto* plNext = new QPushButton("Next  ▶▶");
@@ -139,7 +180,8 @@ public:
         auto* sortBtn = new QPushButton("Sort ▾");
         auto* sortMenu = new QMenu(sortBtn);
         const struct { const char* label; const char* key; } sorts[] = {
-            {"By title / name", "title"}, {"By folder, then name", "folder"},
+            {"By artist", "artist"}, {"By title / name", "title"}, {"By time", "time"},
+            {"By folder, then name", "folder"},
             {"By date (oldest first)", "dateold"}, {"By date (newest first)", "datenew"},
             {"Reverse order", "reverse"}, {"Randomize", "random"}};
         for (const auto& so : sorts) {
@@ -369,6 +411,7 @@ public:
         }
 
         auto* plBox = new QGroupBox("Playlist");
+        m_plBox = plBox;
         auto* plLay = new QVBoxLayout(plBox);
         plLay->addWidget(m_list, 1);
         plLay->addLayout(plRow);
@@ -451,7 +494,7 @@ public:
         connect(m_file, &QLineEdit::returnPressed, addUrl, &QPushButton::click);
         connect(plRemove, &QPushButton::clicked, this, [this] { removeSelected(); });
         connect(plClear, &QPushButton::clicked, this, [this] {
-            if (running()) cmd({"playlist-clear"}); else m_list->clear();
+            if (running()) cmd({"playlist-clear"}); else { m_list->clear(); renumber(); }
             savePlaylist();
         });
         connect(plPrev, &QPushButton::clicked, this, [this] { cmd({"script-message", "mister-prev"}); });
@@ -461,6 +504,7 @@ public:
         connect(m_list->model(), &QAbstractItemModel::rowsMoved, this,
                 [this](const QModelIndex&, int start, int end, const QModelIndex&, int dest) {
             if (m_syncing) return;
+            if (!running()) renumber();
             if (running()) {
                 const int n = end - start + 1;
                 if (dest > end)
@@ -470,7 +514,8 @@ public:
             }
             savePlaylist();
         });
-        connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) {
+        connect(m_list->header(), &QHeaderView::sectionClicked, this, [this](int c) { sortByColumn(c); });
+        connect(m_list, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* it) {
             const int r = m_list->row(it);
             if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r});
             else start(r);
@@ -636,7 +681,7 @@ private:
         auto* del = new QShortcut(Qt::Key_Delete, m_list);
         del->setContext(Qt::WidgetShortcut);
         connect(del, &QShortcut::activated, this, [this] { removeSelected(); });
-        connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem* it) {   // Enter plays
+        connect(m_list, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it) {   // Enter plays
             const int r = m_list->row(it);
             if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r}); else start(r);
         });
@@ -883,20 +928,30 @@ private:
     // Winamp-style "Sort List". Stopped: reorder the local list. Running: mpv owns the order, so
     // turn the wanted order into playlist-move commands (the current entry keeps playing);
     // mpv reports the result back and the debounced refresh redraws the list.
-    void sortPlaylist(const QString& key) {
+    // Column header click: toggle ascending/descending on the same column.
+    void sortByColumn(int c) {
+        if (c < 1 || c > 3) return;
+        m_sortAsc = (c == m_sortCol) ? !m_sortAsc : true;
+        m_sortCol = c;
+        m_list->header()->setSortIndicator(c, m_sortAsc ? Qt::AscendingOrder : Qt::DescendingOrder);
+        sortPlaylist(c == 1 ? "artist" : c == 2 ? "title" : "time", m_sortAsc);
+    }
+    void sortPlaylist(const QString& key, bool asc = true) {
         const int n = m_list->count();
         if (n < 2) return;
         if (key == "random" && running()) { cmd({"playlist-shuffle"}); return; }
-        struct E { int idx; QString path, name, dir; QDateTime mtime; bool local; };
+        struct E { int idx; QString path, name, artist, dir; QDateTime mtime; bool local; double dur; };
         QVector<E> es;
         for (int i = 0; i < n; i++) {
             E e;
             e.idx = i;
-            e.path = m_list->item(i)->data(Qt::UserRole).toString();
+            e.path = m_list->item(i)->data(0, Qt::UserRole).toString();
             const QFileInfo fi(e.path);
             e.local = fi.exists();
-            const QString lbl = m_list->item(i)->data(Qt::UserRole + 1).toString();
+            const QString lbl = m_list->item(i)->data(0, R_TITLE).toString();
             e.name = !lbl.isEmpty() ? lbl : (e.local ? fi.fileName() : e.path);
+            e.artist = m_list->item(i)->data(0, R_ARTIST).toString();
+            e.dur = m_list->item(i)->data(0, R_DUR).toDouble();
             e.dir = e.local ? fi.absolutePath() : QString();
             if (e.local) e.mtime = fi.lastModified();
             es << e;
@@ -905,7 +960,21 @@ private:
         coll.setNumericMode(true);
         coll.setCaseSensitivity(Qt::CaseInsensitive);
         auto byName = [&](const E& a, const E& b) { return coll.compare(a.name, b.name) < 0; };
-        if (key == "title") std::stable_sort(es.begin(), es.end(), byName);
+        if (key == "title") { std::stable_sort(es.begin(), es.end(), byName); if (!asc) std::reverse(es.begin(), es.end()); }
+        else if (key == "artist") {
+            std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
+                if (a.artist.isEmpty() != b.artist.isEmpty()) return !a.artist.isEmpty();   // untagged last
+                const int c = coll.compare(a.artist, b.artist);
+                return c != 0 ? c < 0 : byName(a, b);
+            });
+            if (!asc) std::reverse(es.begin(), es.end());
+        } else if (key == "time") {
+            std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
+                if ((a.dur > 0) != (b.dur > 0)) return a.dur > 0;                          // unknown last
+                return a.dur < b.dur;
+            });
+            if (!asc) std::reverse(es.begin(), es.end());
+        }
         else if (key == "folder")
             std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
                 if (a.local != b.local) return a.local;            // streams/URLs go last
@@ -929,6 +998,7 @@ private:
             const QSignalBlocker b(m_list);
             m_list->clear();
             for (const QString& pth : paths) addLocal(pth);
+            renumber();
             savePlaylist();
             return;
         }
@@ -965,35 +1035,87 @@ private:
 
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
 
-    QString entryLabel(const QString& f) const {
-        const QString tag = m_tags.value(f);
-        if (!tag.isEmpty()) return tag;
-        return QFileInfo::exists(f) ? QFileInfo(f).fileName() : f;
+    // ---- playlist rows: # | Artist | Title | Time ---------------------------------------------------
+    struct Tag { QString artist, title; double dur = -1; };
+    static constexpr int R_ARTIST = Qt::UserRole + 1, R_TITLE = Qt::UserRole + 2, R_DUR = Qt::UserRole + 3;
+
+    static QString fmtDur(double sec) {
+        const qint64 t = qint64(sec + 0.5);
+        if (t >= 3600)
+            return QString("%1:%2:%3").arg(t / 3600).arg(t / 60 % 60, 2, 10, QChar('0')).arg(t % 60, 2, 10, QChar('0'));
+        return QString("%1:%2").arg(t / 60).arg(t % 60, 2, 10, QChar('0'));
+    }
+    static const QStringList& mediaExts() {
+        static const QStringList e = {"mkv", "mp4", "avi", "mov", "webm", "mpg", "mpeg", "ts", "m2ts", "wmv", "flv",
+                                      "m4v", "ogv", "vob", "mp3", "flac", "ogg", "opus", "wav", "m4a", "aac", "wma",
+                                      "ape", "mka"};
+        return e;
+    }
+
+    void fillItem(QTreeWidgetItem* it) {
+        const QString path = it->data(0, Qt::UserRole).toString();
+        const Tag t = m_tags.value(path);
+        QString title = t.title;
+        if (title.isEmpty()) title = path.contains("://") ? path : QFileInfo(path).fileName();
+        it->setText(1, t.artist);
+        it->setText(2, title);
+        it->setText(3, t.dur > 0 ? fmtDur(t.dur) : QString());
+        it->setData(0, R_ARTIST, t.artist);
+        it->setData(0, R_TITLE, title);
+        it->setData(0, R_DUR, t.dur);
+        it->setToolTip(2, path);
     }
     void addLocal(const QString& f) {
-        const QString label = entryLabel(f);
-        auto* it = new QListWidgetItem(label);
-        it->setData(Qt::UserRole, f);
-        it->setData(Qt::UserRole + 1, label);   // plain label (no "▶ "), used for sorting
-        it->setToolTip(f);
+        auto* it = new QTreeWidgetItem;
+        it->setData(0, Qt::UserRole, f);
+        it->setFlags(it->flags() & ~Qt::ItemIsDropEnabled);   // drops go between rows, never onto one
+        it->setTextAlignment(0, Qt::AlignRight | Qt::AlignVCenter);
+        it->setTextAlignment(3, Qt::AlignRight | Qt::AlignVCenter);
+        it->setText(0, QString::number(m_list->count() + 1));
+        fillItem(it);
         m_list->addItem(it);
         queueTags(f);
     }
+    void setRowBold(QTreeWidgetItem* it, bool bold) {
+        for (int c = 0; c < 4; c++) {
+            QFont f = it->font(c);
+            f.setBold(bold);
+            it->setFont(c, f);
+        }
+    }
+    // Row numbers (with ▶ on the playing row) and the group title with count and total time.
+    void renumber() {
+        double total = 0;
+        int known = 0;
+        for (int i = 0; i < m_list->count(); i++) {
+            auto* it = m_list->item(i);
+            it->setText(0, (i == m_curRow ? QString("▶ ") : QString()) + QString::number(i + 1));
+            const double d = it->data(0, R_DUR).toDouble();
+            if (d > 0) { total += d; known++; }
+        }
+        if (m_plBox)
+            m_plBox->setTitle(QString("Playlist  ·  %1 tracks").arg(m_list->count()) +
+                              (known ? "  ·  " + fmtDur(total) : QString()));
+    }
 
-    // "Artist – Title" for audio files from the tags (ffprobe), read in the background and cached.
+    // ---- tags (artist / title / duration via ffprobe), read in the background and cached ---------
     QString tagCachePath() const {
         QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::CacheLocation));
-        return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/misterMPV-tags.json";
+        return QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/misterMPV-tags2.json";
     }
     void loadTags() {
         QFile f(tagCachePath());
         if (!f.open(QIODevice::ReadOnly)) return;
         const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
-        for (auto it = o.begin(); it != o.end(); ++it) m_tags.insert(it.key(), it.value().toString().replace(" – ", " - "));
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            const QJsonObject t = it.value().toObject();
+            m_tags.insert(it.key(), Tag{t.value("a").toString(), t.value("t").toString(), t.value("d").toDouble(-1)});
+        }
     }
     void saveTags() {
         QJsonObject o;
-        for (auto it = m_tags.begin(); it != m_tags.end(); ++it) o.insert(it.key(), it.value());
+        for (auto it = m_tags.begin(); it != m_tags.end(); ++it)
+            o.insert(it.key(), QJsonObject{{"a", it->artist}, {"t", it->title}, {"d", it->dur}});
         QFile f(tagCachePath());
         if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
     }
@@ -1005,14 +1127,13 @@ private:
     }
     bool inList(const QString& path) const {
         for (int i = 0; i < m_list->count(); i++)
-            if (m_list->item(i)->data(Qt::UserRole).toString() == path) return true;
+            if (m_list->item(i)->data(0, Qt::UserRole).toString() == path) return true;
         return false;
     }
     void queueTags(const QString& path) {
-        static const QStringList audio = {"mp3", "flac", "ogg", "opus", "m4a", "aac", "wma", "wav", "ape", "mka"};
-        if (m_tags.contains(path) || m_tagQueue.contains(path)) return;
-        const QFileInfo fi(path);
-        if (!fi.isFile() || !audio.contains(fi.suffix().toLower())) return;
+        if (path.contains("://") || m_tags.contains(path) || m_tagQueued.contains(path)) return;
+        if (!mediaExts().contains(QFileInfo(path).suffix().toLower())) return;
+        m_tagQueued.insert(path);
         m_tagQueue << path;
         if (m_tagQueue.size() % 25 == 1) showTagProgress();
         pumpTags();
@@ -1020,49 +1141,49 @@ private:
     void pumpTags() {
         while (m_tagRunning < 4 && !m_tagQueue.isEmpty()) {
             const QString path = m_tagQueue.takeFirst();
+            m_tagQueued.remove(path);
             if (!inList(path)) continue;   // removed/cleared while waiting
             auto* pr = new QProcess(this);
             m_tagRunning++;
             connect(pr, &QProcess::finished, this, [this, pr, path] {
-                QString label;
-                const QJsonObject tags = QJsonDocument::fromJson(pr->readAllStandardOutput()).object()
-                                             .value("format").toObject().value("tags").toObject();
+                const QJsonObject fmt = QJsonDocument::fromJson(pr->readAllStandardOutput()).object().value("format").toObject();
+                const QJsonObject tags = fmt.value("tags").toObject();
                 auto get = [&](const char* k) {
                     for (auto it = tags.begin(); it != tags.end(); ++it)
                         if (it.key().compare(k, Qt::CaseInsensitive) == 0) return it.value().toString().trimmed();
                     return QString();
                 };
-                QString artist = get("artist"), title = get("title");
-                if (artist.isEmpty()) artist = get("album_artist");
-                if (!title.isEmpty()) label = artist.isEmpty() ? title : artist + " - " + title;
-                m_tags.insert(path, label);   // "" = no usable tags, do not probe again
-                if (!label.isEmpty()) {
-                    for (int i = 0; i < m_list->count(); i++) {
-                        auto* it = m_list->item(i);
-                        if (it->data(Qt::UserRole).toString() != path) continue;
-                        it->setData(Qt::UserRole + 1, label);
-                        it->setText((it->font().bold() ? "▶ " : "") + label);
-                    }
+                Tag t;
+                t.artist = get("artist");
+                if (t.artist.isEmpty()) t.artist = get("album_artist");
+                t.title = get("title");
+                t.dur = fmt.value("duration").toString().toDouble();
+                if (t.dur <= 0) t.dur = -1;
+                m_tags.insert(path, t);   // even an empty Tag: do not probe again
+                for (int i = 0; i < m_list->count(); i++) {
+                    auto* it = m_list->item(i);
+                    if (it->data(0, Qt::UserRole).toString() == path) fillItem(it);
                 }
                 pr->deleteLater();
                 m_tagRunning--;
-                if ((++m_tagDone % 40) == 0 || (m_tagQueue.isEmpty() && m_tagRunning == 0)) saveTags();
+                if ((++m_tagDone % 40) == 0 || (m_tagQueue.isEmpty() && m_tagRunning == 0)) { saveTags(); renumber(); }
                 showTagProgress();
                 pumpTags();
             });
             connect(pr, &QProcess::errorOccurred, this, [this, pr, path](QProcess::ProcessError e) {
                 if (e != QProcess::FailedToStart) return;
-                m_tags.insert(path, QString());
+                m_tags.insert(path, Tag());
                 pr->deleteLater();
                 m_tagRunning--;
             });
-            pr->start("ffprobe", {"-v", "error", "-show_entries", "format_tags=artist,title,album_artist",
-                                  "-of", "json", path});
+            pr->start("ffprobe", {"-v", "error", "-show_entries",
+                                  "format=duration:format_tags=artist,title,album_artist", "-of", "json", path});
         }
     }
+
     void savePlaylist() {
         QStringList l;
-        for (int i = 0; i < m_list->count(); i++) l << m_list->item(i)->data(Qt::UserRole).toString();
+        for (int i = 0; i < m_list->count(); i++) l << m_list->item(i)->data(0, Qt::UserRole).toString();
         m_set.setValue("playlist", l);
     }
     // While mpv runs it owns the list (it reports back via the "playlist" property).
@@ -1075,12 +1196,14 @@ private:
         for (auto* it : m_list->selectedItems()) rows << m_list->row(it);
         std::sort(rows.begin(), rows.end(), std::greater<int>());   // highest first keeps indices valid
         for (int r : rows) removeEntry(r);
+        if (!running()) renumber();
         savePlaylist();
     }
     void removeEntry(int row) {
         if (running()) cmd(QJsonArray{"playlist-remove", row}); else delete m_list->takeItem(row);
     }
     void showPlaylist(const QJsonArray& pl) {
+        if (!running()) return;   // late event while mpv shuts down: keep the stopped list as it is
         // Never rebuild the list while the user is dragging/pressing in it: Qt's drag loop still
         // holds pointers to the items and clear() would free them under it.
         if ((QApplication::mouseButtons() & Qt::LeftButton) && m_list->underMouse()) {
@@ -1100,16 +1223,17 @@ private:
             const QJsonObject o = pl[i].toObject();
             const QString f = o.value("filename").toString();
             addLocal(f);
+            auto* it = m_list->item(i);
             const QString title = o.value("title").toString();
-            if (!title.isEmpty()) m_list->item(i)->setText(title);
+            if (!title.isEmpty() && m_tags.value(f).title.isEmpty()) {   // streams: title from mpv
+                it->setText(2, title);
+                it->setData(0, R_TITLE, title);
+            }
             if (o.value("current").toBool()) cur = i;
         }
-        for (int i = 0; i < m_list->count(); i++) {
-            QFont f = m_list->item(i)->font();
-            f.setBold(i == cur);
-            m_list->item(i)->setFont(f);
-            m_list->item(i)->setText((i == cur ? "▶ " : "") + m_list->item(i)->text());
-        }
+        m_curRow = cur;
+        for (int i = 0; i < m_list->count(); i++) setRowBold(m_list->item(i), i == cur);
+        renumber();
         if (cur >= 0) m_list->scrollToItem(m_list->item(cur));
         m_syncing = false;
         savePlaylist();
@@ -1160,7 +1284,7 @@ private:
              ",mister-track-pos=" + QString(m_trackPos->currentIndex() ? "top" : "bottom");
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
-        for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
+        for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(0, Qt::UserRole).toString();
         m_proc.start(mpvPath(), a);
         m_status->setText("starting…");
         setLed(Led::Starting);
@@ -1180,6 +1304,11 @@ private:
         m_sock.abort();
         m_play->setText("▶  Play");
         setLed(Led::Stopped);
+        m_curRow = -1;
+        if (m_plTimer) m_plTimer->stop();
+        m_hasPendingPl = false;
+        for (int i = 0; i < m_list->count(); i++) setRowBold(m_list->item(i), false);
+        renumber();
         setControlsEnabled(false);
         m_status->setText(m_proc.exitCode() == 0 ? "stopped" : "mpv exited (code " + QString::number(m_proc.exitCode()) + ")");
         m_audio->clear();
@@ -1334,8 +1463,13 @@ private:
     QCheckBox* m_calib;
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
-    QHash<QString, QString> m_tags;
+    QHash<QString, Tag> m_tags;
+    QSet<QString> m_tagQueued;
     QStringList m_tagQueue;
+    QGroupBox* m_plBox = nullptr;
+    int m_curRow = -1;
+    bool m_sortAsc = true;
+    int m_sortCol = -1;
     int m_tagRunning = 0;
     int m_tagDone = 0;
     bool m_syncing = false;
@@ -1355,7 +1489,7 @@ private:
     QComboBox *m_repeat, *m_vis, *m_trackPos;
     QCheckBox* m_trackInfo;
     QCheckBox* m_shuffle;
-    QListWidget* m_list;
+    PlaylistView* m_list;
     QDialog* m_calDlg;
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;

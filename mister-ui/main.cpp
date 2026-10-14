@@ -44,12 +44,13 @@ public:
         auto* fileRow = new QHBoxLayout;
         m_file = new QLineEdit;
         m_file->setPlaceholderText("file or URL");
-        auto* browse = new QPushButton("Browse");
-        auto* addUrl = new QPushButton("Add");
+        auto* browse = new QPushButton("Load…");
+        browse->setToolTip("Pick one or more files (also network shares) and add them to the playlist");
+        auto* addUrl = new QPushButton("Add to PL");
         addUrl->setToolTip("Add the file/URL in the box to the playlist");
         fileRow->addWidget(m_file);
-        fileRow->addWidget(addUrl);
         fileRow->addWidget(browse);
+        fileRow->addWidget(addUrl);
 
         m_list = new QListWidget;
         m_list->setMinimumHeight(110);

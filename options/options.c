@@ -1139,6 +1139,10 @@ static const struct MPOpts mp_default_opts = {
 
     .cuda_device = -1,
 
+    // MiSTer fork: always create the VO (also for audio-only files) so the gamepad thread, the
+    // artist/title overlay and the output session exist without a video track.
+    .force_vo = 1,
+
     .watch_later_options = (char *[]){
         "start",
         "speed",

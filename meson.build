@@ -63,8 +63,8 @@ fs = import('fs')
 if not fs.exists(gmz_dir / 'zig-out/lib/libgroovy-mister-zig.a')
     zig = find_program('zig', required: true)
     message('Building groovy-mister-zig with zig (first configure only)...')
-    run_command(zig, 'build', '-Doptimize=ReleaseFast', '--prefix', gmz_dir / 'zig-out',
-                check: true, cwd: gmz_dir)
+    run_command(zig, 'build', '--build-file', gmz_dir / 'build.zig', '-Doptimize=ReleaseFast',
+                '--prefix', gmz_dir / 'zig-out', check: true)
 endif
 gmz_lib = meson.get_compiler('c').find_library('groovy-mister-zig', dirs: [gmz_dir / 'zig-out/lib'], static: true)
 dependencies += [gmz_lib, declare_dependency(compile_args: ['-I' + gmz_dir / 'include'],

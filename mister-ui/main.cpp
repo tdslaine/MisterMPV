@@ -208,12 +208,20 @@ public:
         btns->addWidget(plNext);
         btns->addWidget(m_loop);
 
+        auto* plBox = new QGroupBox("Playlist");
+        auto* plLay = new QVBoxLayout(plBox);
+        plLay->addWidget(m_list, 1);
+        plLay->addLayout(plRow);
+        QFont sf = m_status->font();
+        sf.setBold(true);
+        sf.setPointSizeF(sf.pointSizeF() + 1);
+        m_status->setFont(sf);
+        m_status->setText("stopped");
         root->addLayout(fileRow);
+        root->addWidget(m_status);
         root->addLayout(seekRow);
         root->addLayout(btns);
-        root->addWidget(m_status);
-        root->addWidget(m_list, 1);
-        root->addLayout(plRow);
+        root->addWidget(plBox, 1);
         root->addWidget(outBox);
         root->addWidget(trackBox);
         root->addWidget(picBox);
@@ -466,7 +474,7 @@ private:
         m_status->setText("playing");
         applyView();
         int id = 1;
-        for (const char* p : {"time-pos", "duration", "pause", "track-list", "playlist"})
+        for (const char* p : {"time-pos", "duration", "pause", "track-list", "playlist", "media-title"})
             cmd({"observe_property", id++, p});
     }
 
@@ -530,6 +538,8 @@ private:
                 }
             } else if (n == "pause") {
                 m_pause->setText(v.toBool() ? "▶" : "⏸");
+            } else if (n == "media-title") {
+                if (v.isString()) m_status->setText("▶ " + v.toString());
             } else if (n == "playlist") {
                 showPlaylist(v.toArray());
             } else if (n == "track-list") {

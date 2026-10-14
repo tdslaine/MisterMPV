@@ -52,6 +52,8 @@ public:
     Window() {
         setWindowTitle("misterMPV");
         auto* root = new QVBoxLayout(this);
+        root->setContentsMargins(12, 14, 12, 12);
+        root->setSpacing(7);
 
         auto* fileRow = new QHBoxLayout;
         m_file = new QLineEdit;
@@ -326,6 +328,7 @@ public:
         m_status->setFont(sf);
         m_status->setText("stopped");
         root->addWidget(m_status);
+        root->addSpacing(8);   // air between the title line and the seek bar
         root->addLayout(seekRow);
         root->addLayout(btns);
 

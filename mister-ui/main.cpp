@@ -301,25 +301,25 @@ public:
         m_seek->setRange(0, 1000);
         m_time = new QLabel("0:00 / 0:00");
         m_status = new QLabel;
-        auto* seekRow = new QHBoxLayout;
-        seekRow->addWidget(m_seek, 1);
-        seekRow->addWidget(m_time);
-
-        m_play = new QPushButton("▶ Play");
-        m_pause = new QPushButton("⏸");
         auto* back = new QPushButton("−10 s");
         auto* fwd = new QPushButton("+10 s");
+        for (auto* b : {back, fwd}) { b->setFixedWidth(60); b->setToolTip("Seek 10 seconds"); }
+        auto* seekRow = new QHBoxLayout;
+        seekRow->addWidget(back);
+        seekRow->addWidget(m_seek, 1);
+        seekRow->addWidget(fwd);
+        seekRow->addWidget(m_time);
+
+        // Winamp order: Prev | Play | Pause | Stop | Next, all the same width
+        m_play = new QPushButton("▶  Play");
+        m_pause = new QPushButton("❚❚  Pause");
+        m_pause->setCheckable(true);
+        m_stop = new QPushButton("■  Stop");
         auto* btns = new QHBoxLayout;
-        for (auto* b : {(QPushButton*)plPrev, (QPushButton*)plNext, back, fwd, m_pause}) {
-            b->setMinimumWidth(78);
-            b->setMaximumWidth(78);
+        for (auto* b : {(QPushButton*)plPrev, m_play, m_pause, m_stop, (QPushButton*)plNext}) {
+            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            btns->addWidget(b, 1);
         }
-        btns->addWidget(m_play, 1);
-        btns->addWidget(plPrev);
-        btns->addWidget(back);
-        btns->addWidget(m_pause);
-        btns->addWidget(fwd);
-        btns->addWidget(plNext);
 
         auto* plBox = new QGroupBox("Playlist");
         auto* plLay = new QVBoxLayout(plBox);
@@ -435,7 +435,12 @@ public:
             cmd({"script-message", "mister-shuffle", on ? "yes" : "no"});
         });
         connect(m_play, &QPushButton::clicked, this, [this] {
-            if (m_proc.state() == QProcess::NotRunning) start(); else stop();
+            if (m_proc.state() == QProcess::NotRunning) { start(); return; }
+            if (m_pause->isChecked()) cmd({"set_property", "pause", false});   // resume
+            else cmd({"seek", 0, "absolute"});                                 // like Winamp: play restarts
+        });
+        connect(m_stop, &QPushButton::clicked, this, [this] {
+            if (m_proc.state() != QProcess::NotRunning) stop();
         });
         connect(m_pause, &QPushButton::clicked, this, [this] { cmd({"cycle", "pause"}); });
         connect(back, &QPushButton::clicked, this, [this] { cmd({"seek", -10, "relative"}); });
@@ -494,7 +499,7 @@ public:
 
 private:
     void setControlsEnabled(bool on) {
-        for (auto* w : {(QWidget*)m_prev, (QWidget*)m_next, (QWidget*)m_pause, (QWidget*)m_seek, (QWidget*)m_audio, (QWidget*)m_sub})
+        for (auto* w : {(QWidget*)m_prev, (QWidget*)m_next, (QWidget*)m_pause, (QWidget*)m_stop, (QWidget*)m_seek, (QWidget*)m_audio, (QWidget*)m_sub})
             w->setEnabled(on);
     }
 
@@ -903,7 +908,6 @@ private:
         a << "--playlist-start=" + QString::number(startRow);
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
         m_proc.start(mpvPath(), a);
-        m_play->setText("⏹ Stop");
         m_status->setText("starting…");
         m_tries = 0;
         m_retry.start();
@@ -919,7 +923,7 @@ private:
     void onStopped() {
         m_retry.stop();
         m_sock.abort();
-        m_play->setText("▶ Play");
+        { const QSignalBlocker b(m_pause); m_pause->setChecked(false); }
         setControlsEnabled(false);
         m_status->setText(m_proc.exitCode() == 0 ? "stopped" : "mpv exited (code " + QString::number(m_proc.exitCode()) + ")");
         m_audio->clear();
@@ -1020,7 +1024,7 @@ private:
                     m_seek->setValue(int(t / m_duration * 1000));
                 }
             } else if (n == "pause") {
-                m_pause->setText(v.toBool() ? "▶" : "⏸");
+                { const QSignalBlocker b(m_pause); m_pause->setChecked(v.toBool()); }
             } else if (n == "volume" && v.isDouble()) {   // gamepad / other changes follow the slider
                 m_remoteVS = true;
                 m_vol->setValue(qRound(v.toDouble()));
@@ -1095,7 +1099,7 @@ private:
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
     QLabel *m_time, *m_status;
-    QPushButton *m_play, *m_pause;
+    QPushButton *m_play, *m_pause, *m_stop;
     QProcess m_proc;
     QProcess m_ssh;
     QString m_askpass;

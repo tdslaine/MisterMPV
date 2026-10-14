@@ -112,6 +112,13 @@ public:
         m_subPos->setSuffix(" %");
         m_subPos->setValue(m_set.value("subPos", 100).toInt());
         m_subPos->setToolTip("Vertical subtitle position: 100 = bottom of the screen, lower moves up.");
+        m_osdSize = new QSpinBox;
+        m_osdSize->setRange(12, 72);
+        m_osdSize->setSuffix(" px");
+        m_osdSize->setValue(m_set.value("osdSize", 28).toInt());
+        m_osdSize->setToolTip("Height of the on-screen text (gamepad status, volume, track names) in raster "
+                              "pixels, independent of the modeline. Bold with a heavy outline so it stays "
+                              "readable at 240p.");
         m_subBars = new QCheckBox("Subtitles in black bars");
         m_subBars->setChecked(m_set.value("subBars", true).toBool());
         m_subBars->setToolTip("Letterboxed films: put subtitles into the black bar below the picture "
@@ -210,6 +217,7 @@ public:
         tf->addRow("Subtitle position:", sliderRow(m_subPos));
         tf->addRow("Subtitle colour:", m_subColor);
         tf->addRow("", m_subBars);
+        tf->addRow("OSD text size:", sliderRow(m_osdSize));
 
         // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
         auto* picBox = new QGroupBox("Picture");
@@ -374,6 +382,7 @@ public:
         connect(m_subPos, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_subColor, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_subBars, &QCheckBox::toggled, this, [this](bool) { applyView(); });
+        connect(m_osdSize, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
             cmd({"set_property", "loop-file", on ? "inf" : "no"});
@@ -551,6 +560,12 @@ private:
         core->setToolTip("File (or glob) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
         auto* coreOrig = new QLineEdit(m_set.value("corePathOrig", kDefaultOrigCore).toString());
         coreOrig->setToolTip("File (or glob) of the original Groovy core; the newest match is loaded.");
+        auto* colorOrder = new QComboBox;
+        colorOrder->addItems({"BGR (default - what the Groovy core expects)", "RGB"});
+        colorOrder->setCurrentIndex(m_set.value("colorOrder", 0).toInt());
+        colorOrder->setToolTip("Channel order sent to the MiSTer. If skin tones look blue (or red tinted), "
+                               "flip it. Applies on the next Play.");
+        f->addRow("Colour order:", colorOrder);
         f->addRow("SSH user:", u);
         f->addRow("SSH password:", pw);
         f->addRow("SSH port:", port);
@@ -565,11 +580,12 @@ private:
         btns->addWidget(ok);
         f->addRow(btns);
         connect(defaults, &QPushButton::clicked, &d, [=] {
-            u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultNlcCore); coreOrig->setText(kDefaultOrigCore);
+            colorOrder->setCurrentIndex(0); u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultNlcCore); coreOrig->setText(kDefaultOrigCore);
         });
         connect(ok, &QPushButton::clicked, &d, &QDialog::accept);
         d.setMinimumWidth(440);
         if (d.exec() == QDialog::Accepted) {
+            m_set.setValue("colorOrder", colorOrder->currentIndex());
             m_set.setValue("sshUser", u->text().trimmed());
             m_set.setValue("sshPass", pw->text());
             m_set.setValue("sshPort", port->value());
@@ -645,6 +661,9 @@ private:
         QStringList a = {"--no-config", "--vo=mister", "--ao=mister",
                          "--vo-mister-host=" + m_host->text(), "--vo-mister-modeline=" + ml,
                          "--vo-mister-near=" + QString::number(m_near->currentIndex()),
+                         "--osd-scale-by-window=no", "--osd-font-size=" + QString::number(m_osdSize->value()),
+                         "--osd-bold=yes", "--osd-border-size=2.5", "--osd-blur=0", "--osd-shadow-offset=0",
+                         "--vo-mister-color-order=" + QString(m_set.value("colorOrder", 0).toInt() ? "rgb" : "bgr"),
                          "--vo-mister-pad=" + QString(m_pad->isChecked() ? "yes" : "no"),
                          "--vo-mister-field-order=" + QString(m_field->currentIndex() ? "bff" : "tff"),
                          "--vo-mister-flicker=" + QString(m_flicker->currentIndex() == 2 ? "full"
@@ -714,6 +733,8 @@ private:
         m_set.setValue("subPos", m_subPos->value());
         m_set.setValue("subColor", m_subColor->currentIndex());
         m_set.setValue("subBars", m_subBars->isChecked());
+        m_set.setValue("osdSize", m_osdSize->value());
+        cmd({"set_property", "osd-font-size", m_osdSize->value()});
         cmd({"set_property", "sub-use-margins", m_subBars->isChecked()});
         cmd({"set_property", "sub-ass-force-margins", m_subBars->isChecked()});
         cmd({"set_property", "sub-color", subColorHex()});
@@ -821,7 +842,7 @@ private:
     QCheckBox* m_subBars;
     bool m_syncing = false;
     QCheckBox* m_pad;
-    QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
+    QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
     QListWidget* m_list;
     QDialog* m_calDlg;

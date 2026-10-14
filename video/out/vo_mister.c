@@ -34,6 +34,8 @@ struct priv {
     int near_lvl;
     int field_order;          // 0 = TFF, 1 = BFF
     bool pad;                 // MiSTer gamepad controls playback
+    int color_order;          // 0 = B,G,R on the wire (default), 1 = R,G,B
+    int fmt;                  // IMGFMT_BGR24 / IMGFMT_RGB24 matching color_order
     int flicker;              // 0 off, 1 light, 2 full
 
     bool connected;
@@ -187,7 +189,7 @@ static void auto_decide(struct vo *vo, struct vo_frame *frame)
         return;
     if (info.width != p->info.width || info.height != p->info.height) {
         talloc_free(p->img);
-        p->img = mp_image_alloc(IMGFMT_BGR24, info.width, info.height);
+        p->img = mp_image_alloc(p->fmt, info.width, info.height);
         mp_image_params_guess_csp(&p->img->params);
     }
     p->info = info;
@@ -209,11 +211,11 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     if (p->calibrate) {
         const int w = p->info.width, h = p->info.height;
         if (!p->info.interlaced) {
-            mister_render_calibration(img->planes[0], w, h, &p->pic_field);
+            mister_render_calibration(img->planes[0], w, h, &p->pic_field, mister_rgb_order());
         } else {   // draw one field, then repeat every line so both fields carry it
             if (!p->calib_buf)
                 p->calib_buf = talloc_size(p, (size_t)w * (h / 2) * 3);
-            mister_render_calibration(p->calib_buf, w, h / 2, &p->pic_field);
+            mister_render_calibration(p->calib_buf, w, h / 2, &p->pic_field, mister_rgb_order());
             for (int y = 0; y < h; y++)
                 memcpy(img->planes[0] + (size_t)y * img->stride[0],
                        p->calib_buf + (size_t)(y / 2) * w * 3, (size_t)w * 3);
@@ -266,7 +268,7 @@ static void flip_page(struct vo *vo)
 static int query_format(struct vo *vo, int format)
 {
     struct priv *p = vo->priv;
-    return mp_sws_supports_formats(p->sws, IMGFMT_BGR24, format);
+    return mp_sws_supports_formats(p->sws, p->fmt, format);
 }
 
 static void uninit(struct vo *vo)
@@ -285,6 +287,8 @@ static int preinit(struct vo *vo)
     mp_sws_enable_cmdline_opts(p->sws, vo->global);
 
     p->auto_mode = !p->modeline || !*p->modeline || !strcmp(p->modeline, "auto");
+    p->fmt = p->color_order ? IMGFMT_RGB24 : IMGFMT_BGR24;
+    mister_set_rgb_order(p->color_order);
     mister_set_interlace(p->field_order, p->flicker);
     if (!mister_acquire(p->host, p->modeline, p->near_lvl, &p->info)) {
         MP_ERR(vo, "Could not connect to the MiSTer.\n");
@@ -297,7 +301,7 @@ static int preinit(struct vo *vo)
     p->fx = m_config_cache_alloc(p, vo->global, &mister_fx_conf);
     update_fx(vo);
 
-    p->img = mp_image_alloc(IMGFMT_BGR24, p->info.width, p->info.height);
+    p->img = mp_image_alloc(p->fmt, p->info.width, p->info.height);
     if (!p->img)
         return -1;
     mp_image_clear(p->img, 0, 0, p->img->w, p->img->h);
@@ -344,6 +348,7 @@ const struct vo_driver video_out_mister = {
         {"near", OPT_INT(near_lvl), M_RANGE(0, 3)},
         {"field-order", OPT_CHOICE(field_order, {"tff", 0}, {"bff", 1})},
         {"pad", OPT_BOOL(pad)},
+        {"color-order", OPT_CHOICE(color_order, {"bgr", 0}, {"rgb", 1})},
         {"flicker", OPT_CHOICE(flicker, {"off", 0}, {"light", 1}, {"full", 2})},
         {0}
     },

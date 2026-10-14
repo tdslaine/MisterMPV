@@ -48,6 +48,7 @@ static struct {
     atomic_bool stop;
     atomic_int bff;              // 1 = bottom field first
     atomic_int flicker;          // 0 off, 1 light, 2 full
+    atomic_int rgb_order;
     atomic_int fx_bri, fx_con, fx_sat, fx_blk, fx_scn, fx_scs;  // levels, x100, x100, levels, percent
 } G = { .lock = PTHREAD_MUTEX_INITIALIZER, .gmz_lock = PTHREAD_MUTEX_INITIALIZER,
         .frame_lock = PTHREAD_MUTEX_INITIALIZER,
@@ -115,7 +116,8 @@ static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
             else if (scs == 1) line = (y % 3) == 2;
         }
         for (int x = 0; x < w; x++, s += 3, d += 3) {
-            int b = lut[s[0]], g = lut[s[1]], r = lut[s[2]];   // wire order is B,G,R
+            const int ro = atomic_load(&G.rgb_order);
+            int b = lut[s[ro ? 2 : 0]], g = lut[s[1]], r = lut[s[ro ? 0 : 2]];   // default wire order is B,G,R
             if (sat != 100) {
                 const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
                 r = clamp8((int)(l + (r - l) * sf));
@@ -130,7 +132,7 @@ static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
                 if (c != 1) g = (int)(g * dark);
                 if (c != 2) b = (int)(b * dark);
             }
-            d[0] = (uint8_t)b; d[1] = (uint8_t)g; d[2] = (uint8_t)r;
+            d[ro ? 2 : 0] = (uint8_t)b; d[1] = (uint8_t)g; d[ro ? 0 : 2] = (uint8_t)r;
         }
     }
 }
@@ -381,6 +383,9 @@ out:
     pthread_mutex_unlock(&G.lock);
     return ok;
 }
+
+void mister_set_rgb_order(int rgb) { atomic_store(&G.rgb_order, rgb ? 1 : 0); }
+int mister_rgb_order(void) { return atomic_load(&G.rgb_order); }
 
 void mister_set_interlace(int bff, int flicker)
 {

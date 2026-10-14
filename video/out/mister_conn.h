@@ -48,6 +48,11 @@ extern const struct m_sub_options mister_fx_conf;
 // vertical low-pass against 1-line interlace flicker. No effect on progressive modes.
 void mister_set_interlace(int bff, int flicker);
 
+// Channel order of the frames handed to mister_set_frame(): 0 = B,G,R (default, what the
+// core/FPGA expects), 1 = R,G,B. Only the picture fx and the calibration pattern need it.
+void mister_set_rgb_order(int rgb);
+int mister_rgb_order(void);
+
 // Packed RGB24 frame, width*height*3 bytes at the given stride.
 void mister_set_frame(const uint8_t *rgb, int stride);
 // Raw 16-bit stereo PCM at 48 kHz.

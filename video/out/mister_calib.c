@@ -39,7 +39,7 @@ static const struct rgb TITLE = {0, 200, 235};
 #define ROWS 12
 #define LINEW 2
 
-struct canvas { uint8_t *p; int w, h; };
+struct canvas { uint8_t *p; int w, h; int rgb; };
 
 static void fill(const struct canvas *c, int x, int y, int fw, int fh, struct rgb col)
 {
@@ -48,15 +48,17 @@ static void fill(const struct canvas *c, int x, int y, int fw, int fh, struct rg
     for (int yy = y0; yy < y1; yy++)
         for (int xx = x0; xx < x1; xx++) {
             uint8_t *d = c->p + ((size_t)yy * c->w + xx) * 3;
-            d[0] = col.b; d[1] = col.g; d[2] = col.r;   // wire order is B,G,R
+            if (c->rgb) { d[0] = col.r; d[1] = col.g; d[2] = col.b; }
+            else        { d[0] = col.b; d[1] = col.g; d[2] = col.r; }   // default wire order is B,G,R
         }
 }
 
-void mister_render_calibration(uint8_t *bgr, int out_w, int out_h, const struct mister_rect *r)
+void mister_render_calibration(uint8_t *bgr, int out_w, int out_h, const struct mister_rect *r,
+                               int rgb_order)
 {
     memset(bgr, 0, (size_t)out_w * out_h * 3);
     if (r->w <= 0 || r->h <= 0) return;
-    const struct canvas c = {bgr, out_w, out_h};
+    const struct canvas c = {bgr, out_w, out_h, rgb_order};
 #define PX(f) (r->x + (int)((f) * r->w + 0.5))
 #define PY(f) (r->y + (int)((f) * r->h + 0.5))
 

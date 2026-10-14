@@ -11,6 +11,7 @@ void mister_picture_rect(double hsize, double vsize, int hoff, int voff,
                          int out_w, int out_h, struct mister_rect *r);
 
 // Draw the calibration pattern (packed B,G,R) for `r` into an out_w x out_h raster.
-void mister_render_calibration(uint8_t *bgr, int out_w, int out_h, const struct mister_rect *r);
+void mister_render_calibration(uint8_t *bgr, int out_w, int out_h, const struct mister_rect *r,
+                               int rgb_order);
 
 #endif

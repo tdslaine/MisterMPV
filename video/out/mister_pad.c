@@ -94,29 +94,40 @@ static void pad_loop(struct mp_input_src *src, void *ctx)
     mp_input_src_init_done(src);
     MP_INFO(src, "MiSTer gamepad control active\n");
 
-    uint16_t prev = 0;
+    uint16_t known = 0;
+    for (size_t i = 0; i < sizeof(PRESS) / sizeof(PRESS[0]); i++)
+        known |= PRESS[i].mask;
+
+    // The FPGA only sends a packet when the state changes, so `cur` is the last known
+    // state and the hold logic below has to run on every tick, not only on new packets.
+    uint16_t cur = 0, prev = 0;
     uint64_t held_since = 0, last_scan = 0;
     while (!atomic_load(&p->stop)) {
-        if (gmz_input_poll(in)) {
-            const uint16_t cur = gmz_input_joy(in).joy1;
-            const uint16_t down = cur & (uint16_t)~prev;
-            for (size_t i = 0; i < sizeof(PRESS) / sizeof(PRESS[0]); i++)
-                if (down & PRESS[i].mask)
-                    feed(src, PRESS[i].cmd);
-            // Holding left/right scans: after 400 ms jump 20 s every 300 ms.
-            const uint16_t lr = cur & (GMZ_JOY_LEFT | GMZ_JOY_RIGHT);
-            if (lr && lr == (prev & (GMZ_JOY_LEFT | GMZ_JOY_RIGHT))) {
-                const uint64_t t = now_ms();
-                if (!held_since) held_since = t;
-                if (t - held_since > 400 && t - last_scan > 300) {
-                    feed(src, lr == GMZ_JOY_LEFT ? "osd-auto seek -20" : "osd-auto seek 20");
-                    last_scan = t;
-                }
-            } else {
-                held_since = 0;
-            }
-            prev = cur;
+        if (gmz_input_poll(in))
+            cur = gmz_input_joy(in).joy1;
+        const uint16_t down = cur & (uint16_t)~prev;
+        for (size_t i = 0; i < sizeof(PRESS) / sizeof(PRESS[0]); i++)
+            if (down & PRESS[i].mask)
+                feed(src, PRESS[i].cmd);
+        if (down & ~known) {   // a button without a function: show its bit so it can be mapped
+            char buf[96];
+            snprintf(buf, sizeof(buf), "show-text \"Pad button 0x%04x (unmapped)\" 2000",
+                     down & ~known);
+            feed(src, buf);
         }
+        // Holding left/right scans: after 400 ms jump 20 s every 300 ms.
+        const uint16_t lr = cur & (GMZ_JOY_LEFT | GMZ_JOY_RIGHT);
+        if (lr == GMZ_JOY_LEFT || lr == GMZ_JOY_RIGHT) {
+            const uint64_t t = now_ms();
+            if (!(prev & lr)) held_since = t;        // just pressed
+            if (t - held_since > 400 && t - last_scan > 300) {
+                feed(src, lr == GMZ_JOY_LEFT ? "osd-auto seek -20" : "osd-auto seek 20");
+                last_scan = t;
+            }
+        } else {
+            held_since = 0;
+        }
+        prev = cur;
         struct timespec ts = {0, 8 * 1000 * 1000};
         nanosleep(&ts, NULL);
     }

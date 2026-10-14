@@ -17,6 +17,9 @@ struct mister_info {
 
 bool mister_acquire(const char *host, const char *modeline, int near_lvl,
                     struct mister_info *info);
+// Reconnect with another modeline key (e.g. "320x240p60"). Returns false on failure; the
+// previous output is then gone, so the caller should treat that as fatal. Idempotent.
+bool mister_switch(const char *modeline, struct mister_info *info);
 void mister_release(void);
 
 // Packed RGB24 frame, width*height*3 bytes at the given stride.

@@ -146,6 +146,70 @@ static void *sender(void *arg)
     return NULL;
 }
 
+static const struct ml *find_ml(const char *key)
+{
+    for (size_t i = 0; i < sizeof(MODELINES) / sizeof(MODELINES[0]); i++)
+        if (!strcmp(MODELINES[i].key, key)) return &MODELINES[i];
+    return NULL;
+}
+
+static void list_modelines(void)
+{
+    fprintf(stderr, "[mister] available modelines:");
+    for (size_t i = 0; i < sizeof(MODELINES) / sizeof(MODELINES[0]); i++)
+        fprintf(stderr, " %s", MODELINES[i].key);
+    fprintf(stderr, "\n");
+}
+
+// Allocate buffers, connect, start the sender. Caller holds G.lock. Needs G.host/G.near_lvl.
+static bool start_locked(const struct ml *ml)
+{
+    G.ml = ml;
+    G.info.width = ml->ha;
+    G.info.height = ml->va;
+    G.info.interlaced = ml->interlace;
+    double fr = ml->pclock * 1e6 / ((double)ml->ht * ml->vt);
+    G.info.refresh = ml->interlace ? fr * 2 : fr;
+
+    const int fh = ml->interlace ? ml->va / 2 : ml->va;
+    G.frame = calloc(1, (size_t)ml->ha * ml->va * 3);
+    G.field = calloc(1, (size_t)ml->ha * fh * 3);
+    nlc_params np = nlc_p(ml->ha, fh, G.near_lvl);
+    G.nlc_cap = nlc_max_encoded_size(&np);
+    G.nlc_buf = malloc(G.nlc_cap);
+    if (!G.frame || !G.field || !G.nlc_buf) goto fail;
+
+    pthread_mutex_lock(&G.gmz_lock);
+    bool ok = open_conn();
+    pthread_mutex_unlock(&G.gmz_lock);
+    if (!ok) goto fail;
+
+    atomic_store(&G.stop, false);
+    if (pthread_create(&G.thread, NULL, sender, NULL)) {
+        pthread_mutex_lock(&G.gmz_lock);
+        gmz_disconnect(G.conn); G.conn = NULL;
+        pthread_mutex_unlock(&G.gmz_lock);
+        goto fail;
+    }
+    return true;
+fail:
+    free(G.frame); free(G.field); free(G.nlc_buf);
+    G.frame = G.field = G.nlc_buf = NULL;
+    return false;
+}
+
+static void stop_locked(void)
+{
+    atomic_store(&G.stop, true);
+    pthread_join(G.thread, NULL);
+    pthread_mutex_lock(&G.gmz_lock);
+    if (G.conn) gmz_disconnect(G.conn);
+    G.conn = NULL;
+    pthread_mutex_unlock(&G.gmz_lock);
+    free(G.frame); free(G.field); free(G.nlc_buf);
+    G.frame = G.field = G.nlc_buf = NULL;
+}
+
 bool mister_acquire(const char *host, const char *modeline, int near_lvl,
                     struct mister_info *info)
 {
@@ -162,67 +226,53 @@ bool mister_acquire(const char *host, const char *modeline, int near_lvl,
         fprintf(stderr, "[mister] no host: set --vo-mister-host / MISTER_HOST\n");
         goto fail;
     }
-    const struct ml *ml = NULL;
-    if (!modeline || !*modeline) modeline = "640x480i60";
-    for (size_t i = 0; i < sizeof(MODELINES) / sizeof(MODELINES[0]); i++)
-        if (!strcmp(MODELINES[i].key, modeline)) ml = &MODELINES[i];
+    // "auto" starts on 640x480i60; the VO switches once it knows the source.
+    if (!modeline || !*modeline || !strcmp(modeline, "auto")) modeline = "640x480i60";
+    const struct ml *ml = find_ml(modeline);
     if (!ml) {
-        fprintf(stderr, "[mister] unknown modeline '%s'. Available:", modeline);
-        for (size_t i = 0; i < sizeof(MODELINES) / sizeof(MODELINES[0]); i++)
-            fprintf(stderr, " %s", MODELINES[i].key);
-        fprintf(stderr, "\n");
+        fprintf(stderr, "[mister] unknown modeline '%s'\n", modeline);
+        list_modelines();
         goto fail;
     }
 
-    G.ml = ml;
     G.host = strdup(host);
     G.near_lvl = near_lvl < 0 ? 0 : near_lvl > 3 ? 3 : near_lvl;
-    G.info.width = ml->ha;
-    G.info.height = ml->va;
-    G.info.interlaced = ml->interlace;
-    double fr = ml->pclock * 1e6 / ((double)ml->ht * ml->vt);
-    G.info.refresh = ml->interlace ? fr * 2 : fr;
-
-    const int fh = ml->interlace ? ml->va / 2 : ml->va;
-    const size_t fsz = (size_t)ml->ha * ml->va * 3;
-    G.frame = calloc(1, fsz);
-    G.field = calloc(1, (size_t)ml->ha * fh * 3);
-    nlc_params np = nlc_p(ml->ha, fh, G.near_lvl);
-    G.nlc_cap = nlc_max_encoded_size(&np);
-    G.nlc_buf = malloc(G.nlc_cap);
-    if (!G.frame || !G.field || !G.nlc_buf) goto fail_free;
-
-    if (!open_conn()) goto fail_free;
-    atomic_store(&G.stop, false);
-    if (pthread_create(&G.thread, NULL, sender, NULL)) goto fail_conn;
+    if (!start_locked(ml)) { free(G.host); G.host = NULL; goto fail; }
 
     G.refs = 1;
     *info = G.info;
     pthread_mutex_unlock(&G.lock);
     return true;
-
-fail_conn:
-    gmz_disconnect(G.conn); G.conn = NULL;
-fail_free:
-    free(G.frame); free(G.field); free(G.nlc_buf); free(G.host);
-    G.frame = G.field = G.nlc_buf = NULL; G.host = NULL;
 fail:
     pthread_mutex_unlock(&G.lock);
     return false;
+}
+
+bool mister_switch(const char *modeline, struct mister_info *info)
+{
+    bool ok = false;
+    pthread_mutex_lock(&G.lock);
+    const struct ml *ml = G.refs > 0 ? find_ml(modeline) : NULL;
+    if (ml == G.ml) { *info = G.info; ok = ml != NULL; goto out; }
+    if (!ml) goto out;
+    stop_locked();
+    ok = start_locked(ml);
+    if (ok) {
+        *info = G.info;
+    } else {
+        fprintf(stderr, "[mister] switch to %s failed, output is down\n", modeline);
+    }
+out:
+    pthread_mutex_unlock(&G.lock);
+    return ok;
 }
 
 void mister_release(void)
 {
     pthread_mutex_lock(&G.lock);
     if (G.refs > 0 && --G.refs == 0) {
-        atomic_store(&G.stop, true);
-        pthread_join(G.thread, NULL);
-        pthread_mutex_lock(&G.gmz_lock);
-        if (G.conn) gmz_disconnect(G.conn);
-        G.conn = NULL;
-        pthread_mutex_unlock(&G.gmz_lock);
-        free(G.frame); free(G.field); free(G.nlc_buf); free(G.host);
-        G.frame = G.field = G.nlc_buf = NULL; G.host = NULL;
+        stop_locked();
+        free(G.host); G.host = NULL; G.ml = NULL;
     }
     pthread_mutex_unlock(&G.lock);
 }

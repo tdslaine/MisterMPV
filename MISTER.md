@@ -18,3 +18,16 @@ Build (meson 1.3+, groovy-mister-zig built at ../MiSTerCast/groovy-mister-zig, o
     ninja -C build
 
 License: mpv GPL; nlc_codec is GPL (verbst/MiSTerCast).
+
+## UI
+
+`mister-ui/` is a small Qt6 front-end (file/URL, host, modeline incl. `auto`, codec, play/pause,
+seek, audio/subtitle track, loop). It starts mpv (`$MPV_MISTER`, else `../build/mpv`) and controls
+it over the JSON IPC socket.
+
+    cmake -S mister-ui -B mister-ui/build -G Ninja && ninja -C mister-ui/build
+    mister-ui/build/mister-ui
+
+`--vo-mister-modeline=auto` (default) switches the modeline after ~8 frames: 25/50 fps content ->
+50 Hz (`320x288p50` / `720x576i50`), everything else -> 60 Hz (`320x240p60` for height <= 240,
+else `640x480i60`).

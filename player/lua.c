@@ -85,6 +85,12 @@ static const char * const builtin_lua_scripts[][2] = {
     {"@select.lua",
 #   include "player/lua/select.lua.inc"
     },
+    {"@mister_playlist.lua",
+#   include "player/lua/mister_playlist.lua.inc"
+    },
+    {"@mister_visualizer.lua",
+#   include "player/lua/mister_visualizer.lua.inc"
+    },
     {"@positioning.lua",
 #   include "player/lua/positioning.lua.inc"
     },

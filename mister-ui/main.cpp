@@ -356,8 +356,8 @@ public:
             if (running()) cmd({"playlist-clear"}); else m_list->clear();
             savePlaylist();
         });
-        connect(plPrev, &QPushButton::clicked, this, [this] { cmd({"playlist-prev"}); });
-        connect(plNext, &QPushButton::clicked, this, [this] { cmd({"playlist-next"}); });
+        connect(plPrev, &QPushButton::clicked, this, [this] { cmd({"script-message", "mister-prev"}); });
+        connect(plNext, &QPushButton::clicked, this, [this] { cmd({"script-message", "mister-next"}); });
         // Drag & drop reorder: while mpv runs it owns the order, so mirror each move there
         // (it then reports the new list back); otherwise just persist the local order.
         connect(m_list->model(), &QAbstractItemModel::rowsMoved, this,
@@ -384,7 +384,7 @@ public:
         });
         connect(m_shuffle, &QCheckBox::toggled, this, [this](bool on) {
             m_set.setValue("shuffle", on);
-            cmd({"set_property", "shuffle", on});
+            cmd({"script-message", "mister-shuffle", on ? "yes" : "no"});
         });
         connect(m_play, &QPushButton::clicked, this, [this] {
             if (m_proc.state() == QProcess::NotRunning) start(); else stop();
@@ -440,13 +440,6 @@ private:
     void setControlsEnabled(bool on) {
         for (auto* w : {(QWidget*)m_prev, (QWidget*)m_next, (QWidget*)m_pause, (QWidget*)m_seek, (QWidget*)m_audio, (QWidget*)m_sub})
             w->setEnabled(on);
-    }
-
-    QString visualizerScript() const {
-        const QString dir = QCoreApplication::applicationDirPath();
-        for (const QString& c : {dir + "/scripts/mister-visualizer.lua", dir + "/../../scripts/mister-visualizer.lua"})
-            if (QFileInfo::exists(c)) return QFileInfo(c).absoluteFilePath();
-        return {};
     }
 
     QString mpvPath() const {
@@ -843,10 +836,8 @@ private:
                          "--sub-ass-style-overrides=" + subColorAss()};
         if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
         if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
-        if (m_shuffle->isChecked()) a << "--shuffle";
-        const QString visScript = visualizerScript();
-        if (!visScript.isEmpty())
-            a << "--script=" + visScript << "--script-opts=mister-vis-mode=" + m_vis->currentData().toString();
+        a << "--script-opts=mister-shuffle=" + QString(m_shuffle->isChecked() ? "yes" : "no") +
+             ",mister-vis-mode=" + m_vis->currentData().toString();
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();

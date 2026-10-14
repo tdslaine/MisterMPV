@@ -15,6 +15,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QDialog>
 #include <QUrl>
 #include <QDirIterator>
 #include <QListWidget>
@@ -47,13 +50,11 @@ public:
         fileRow->addWidget(m_file);
         fileRow->addWidget(addUrl);
         fileRow->addWidget(browse);
-        root->addLayout(fileRow);
 
         m_list = new QListWidget;
         m_list->setMinimumHeight(110);
         m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
         m_list->setToolTip("Playlist - double-click to play an entry");
-        root->addWidget(m_list, 1);
         auto* plRow = new QHBoxLayout;
         auto* plPrev = new QPushButton("⏮ Prev");
         auto* plNext = new QPushButton("Next ⏭");
@@ -62,14 +63,12 @@ public:
         m_loopPl = new QCheckBox("Loop playlist");
         m_prev = plPrev;
         m_next = plNext;
-        for (auto* b : {plPrev, plNext, plRemove, plClear}) plRow->addWidget(b);
+        for (auto* b : {plRemove, plClear}) plRow->addWidget(b);
         plRow->addWidget(m_loopPl);
         plRow->addStretch(1);
-        root->addLayout(plRow);
         for (const QString& f : m_set.value("playlist").toStringList()) addLocal(f);
         m_loopPl->setChecked(m_set.value("loopPlaylist", false).toBool());
 
-        auto* form = new QFormLayout;
         m_host = new QLineEdit(qEnvironmentVariable("MISTER_HOST", m_set.value("host").toString()));
         m_modeline = new QComboBox;
         m_modeline->addItem("auto (match source)");
@@ -130,52 +129,94 @@ public:
         m_aspect->addItems({"Auto (keep aspect, bars)", "Stretch (fill screen)", "Zoom (crop to fill)",
                             "Force 4:3", "Force 16:9", "Force 21:9"});
         m_aspect->setCurrentIndex(m_set.value("aspect", 0).toInt());
-        form->addRow("MiSTer:", m_host);
-        form->addRow("Modeline:", m_modeline);
-        form->addRow("Codec:", m_near);
-        form->addRow("Field order:", m_field);
-        form->addRow("Flicker filter:", m_flicker);
-        form->addRow("Audio:", m_audio);
-        form->addRow("Subtitles:", m_sub);
-        form->addRow("Subtitle size:", m_subScale);
-        form->addRow("Format:", m_aspect);
-        form->addRow("Brightness:", m_bri);
-        form->addRow("Contrast:", m_con);
-        form->addRow("Saturation:", m_sat);
-        form->addRow("Black level:", m_blk);
-        form->addRow("Scanlines:", m_scn);
-        form->addRow("CRT width:", m_hsize);
-        form->addRow("CRT height:", m_vsize);
-        form->addRow("CRT shift H:", m_hoff);
-        form->addRow("CRT shift V:", m_voff);
+        // ---- Output group: settings in pairs -----------------------------------------------
+        auto* outBox = new QGroupBox("Output");
+        auto* og = new QGridLayout(outBox);
+        auto addPair = [og](int row, const QString& l1, QWidget* w1, const QString& l2, QWidget* w2) {
+            og->addWidget(new QLabel(l1), row, 0);
+            og->addWidget(w1, row, 1);
+            if (w2) { og->addWidget(new QLabel(l2), row, 2); og->addWidget(w2, row, 3); }
+        };
+        addPair(0, "MiSTer:", m_host, "Codec:", m_near);
+        addPair(1, "Modeline:", m_modeline, "Format:", m_aspect);
+        addPair(2, "Field order:", m_field, "Flicker filter:", m_flicker);
+        og->setColumnStretch(1, 1);
+        og->setColumnStretch(3, 1);
+
+        // ---- Tracks group --------------------------------------------------------------------
+        auto* trackBox = new QGroupBox("Audio / Subtitles");
+        auto* tf = new QFormLayout(trackBox);
+        tf->addRow("Audio:", m_audio);
+        tf->addRow("Subtitles:", m_sub);
+        tf->addRow("Subtitle size:", sliderRow(m_subScale));
+
+        // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
+        auto* picBox = new QGroupBox("Picture");
+        auto* pf = new QFormLayout(picBox);
+        pf->addRow("Brightness:", sliderRow(m_bri));
+        pf->addRow("Contrast:", sliderRow(m_con));
+        pf->addRow("Saturation:", sliderRow(m_sat));
+        pf->addRow("Black level:", sliderRow(m_blk));
+        pf->addRow("Scanlines:", sliderRow(m_scn));
+        auto* picBtns = new QHBoxLayout;
+        auto* picReset = new QPushButton("Reset colours");
+        auto* calBtn = new QPushButton("CRT calibration…");
+        picBtns->addWidget(picReset);
+        picBtns->addStretch(1);
+        picBtns->addWidget(calBtn);
+        pf->addRow(picBtns);
+        connect(picReset, &QPushButton::clicked, this, [this] {
+            for (auto* sp : {m_bri, m_con, m_sat, m_blk, m_scn}) sp->setValue(0);
+        });
+
+        m_calDlg = new QDialog(this);
+        m_calDlg->setWindowTitle("CRT calibration");
+        auto* cf = new QFormLayout(m_calDlg);
+        cf->addRow("Width:", sliderRow(m_hsize));
+        cf->addRow("Height:", sliderRow(m_vsize));
+        cf->addRow("Shift horizontal:", sliderRow(m_hoff));
+        cf->addRow("Shift vertical:", sliderRow(m_voff));
         auto* calRow = new QHBoxLayout;
         calRow->addWidget(m_calib, 1);
         calRow->addWidget(calReset);
-        form->addRow(calRow);
-        root->addLayout(form);
+        cf->addRow(calRow);
+        m_calDlg->setMinimumWidth(460);
+        connect(calBtn, &QPushButton::clicked, this, [this] { m_calDlg->show(); m_calDlg->raise(); });
+        connect(m_calDlg, &QDialog::finished, this, [this] { m_calib->setChecked(false); });
 
-        m_loop = new QCheckBox("Loop");
-        root->addWidget(m_loop);
-
+        // ---- Transport (top) -------------------------------------------------------------------
         m_seek = new QSlider(Qt::Horizontal);
         m_seek->setRange(0, 1000);
         m_time = new QLabel("0:00 / 0:00");
-        m_time->setAlignment(Qt::AlignCenter);
-        root->addWidget(m_seek);
-        root->addWidget(m_time);
+        m_status = new QLabel;
+        auto* seekRow = new QHBoxLayout;
+        seekRow->addWidget(m_seek, 1);
+        seekRow->addWidget(m_time);
 
-        auto* btns = new QHBoxLayout;
+        m_loop = new QCheckBox("Loop");
         m_play = new QPushButton("▶ Play");
         m_pause = new QPushButton("⏸");
-        auto* back = new QPushButton("-10s");
-        auto* fwd = new QPushButton("+10s");
+        auto* back = new QPushButton("⏪ 10s");
+        auto* fwd = new QPushButton("10s ⏩");
+        auto* btns = new QHBoxLayout;
         btns->addWidget(m_play, 1);
+        btns->addWidget(plPrev);
         btns->addWidget(back);
         btns->addWidget(m_pause);
         btns->addWidget(fwd);
+        btns->addWidget(plNext);
+        btns->addWidget(m_loop);
+
+        root->addLayout(seekRow);
         root->addLayout(btns);
-        m_status = new QLabel;
         root->addWidget(m_status);
+        root->addLayout(fileRow);
+        root->addWidget(m_list, 1);
+        root->addLayout(plRow);
+        root->addWidget(outBox);
+        root->addWidget(trackBox);
+        root->addWidget(picBox);
+        setMinimumWidth(720);
         setControlsEnabled(false);
 
         connect(browse, &QPushButton::clicked, this, [this] {
@@ -288,6 +329,33 @@ private:
             }
         }
         return loc;   // no kio-fuse mount found: let mpv try (will fail for smb)
+    }
+
+    // Slider + number box in one row; the spin box stays the single source of truth.
+    QWidget* sliderRow(QSpinBox* s) {
+        auto* sl = new QSlider(Qt::Horizontal);
+        sl->setRange(s->minimum(), s->maximum());
+        sl->setValue(s->value());
+        connect(sl, &QSlider::valueChanged, s, &QSpinBox::setValue);
+        connect(s, qOverload<int>(&QSpinBox::valueChanged), sl, &QSlider::setValue);
+        return rowOf(sl, s);
+    }
+    QWidget* sliderRow(QDoubleSpinBox* s) {   // 0.1 steps
+        auto* sl = new QSlider(Qt::Horizontal);
+        sl->setRange(int(s->minimum() * 10), int(s->maximum() * 10));
+        sl->setValue(int(s->value() * 10));
+        connect(sl, &QSlider::valueChanged, s, [s](int v) { s->setValue(v / 10.0); });
+        connect(s, qOverload<double>(&QDoubleSpinBox::valueChanged), sl, [sl](double v) { sl->setValue(int(v * 10 + 0.5)); });
+        return rowOf(sl, s);
+    }
+    static QWidget* rowOf(QSlider* sl, QWidget* spin) {
+        auto* w = new QWidget;
+        auto* l = new QHBoxLayout(w);
+        l->setContentsMargins(0, 0, 0, 0);
+        spin->setMinimumWidth(90);
+        l->addWidget(sl, 1);
+        l->addWidget(spin);
+        return w;
     }
 
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
@@ -498,6 +566,7 @@ private:
     QSpinBox *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
     QListWidget* m_list;
+    QDialog* m_calDlg;
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
     QLabel *m_time, *m_status;

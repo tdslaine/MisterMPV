@@ -69,14 +69,20 @@ public:
         auto* plNext = new QPushButton("Next ⏭");
         auto* plRemove = new QPushButton("Remove");
         auto* plClear = new QPushButton("Clear");
-        m_loopPl = new QCheckBox("Loop playlist");
+        m_repeat = new QComboBox;
+        m_repeat->addItems({"Repeat: off", "Repeat: one", "Repeat: all"});
+        m_repeat->setCurrentIndex(m_set.value("repeatMode", 0).toInt());
+        m_repeat->setToolTip("off: stop after the last entry, one: repeat the current entry, all: loop the playlist");
+        m_shuffle = new QCheckBox("Shuffle");
+        m_shuffle->setChecked(m_set.value("shuffle", false).toBool());
+        m_shuffle->setToolTip("Play the playlist in random order (switch off to restore the original order)");
         m_prev = plPrev;
         m_next = plNext;
         for (auto* b : {plRemove, plClear}) plRow->addWidget(b);
-        plRow->addWidget(m_loopPl);
+        plRow->addWidget(m_repeat);
+        plRow->addWidget(m_shuffle);
         plRow->addStretch(1);
         for (const QString& f : m_set.value("playlist").toStringList()) addLocal(f);
-        m_loopPl->setChecked(m_set.value("loopPlaylist", false).toBool());
 
         m_host = new QLineEdit(qEnvironmentVariable("MISTER_HOST", m_set.value("host").toString()));
         m_modeline = new QComboBox;
@@ -260,7 +266,6 @@ public:
         seekRow->addWidget(m_seek, 1);
         seekRow->addWidget(m_time);
 
-        m_loop = new QCheckBox("Loop");
         m_play = new QPushButton("▶ Play");
         m_pause = new QPushButton("⏸");
         auto* back = new QPushButton("⏪ 10s");
@@ -272,7 +277,6 @@ public:
         btns->addWidget(m_pause);
         btns->addWidget(fwd);
         btns->addWidget(plNext);
-        btns->addWidget(m_loop);
 
         auto* plBox = new QGroupBox("Playlist");
         auto* plLay = new QVBoxLayout(plBox);
@@ -336,9 +340,14 @@ public:
             if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r});
             else start(r);
         });
-        connect(m_loopPl, &QCheckBox::toggled, this, [this](bool on) {
-            m_set.setValue("loopPlaylist", on);
-            cmd({"set_property", "loop-playlist", on ? "inf" : "no"});
+        connect(m_repeat, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
+            m_set.setValue("repeatMode", i);
+            cmd({"set_property", "loop-file", i == 1 ? "inf" : "no"});
+            cmd({"set_property", "loop-playlist", i == 2 ? "inf" : "no"});
+        });
+        connect(m_shuffle, &QCheckBox::toggled, this, [this](bool on) {
+            m_set.setValue("shuffle", on);
+            cmd({"set_property", "shuffle", on});
         });
         connect(m_play, &QPushButton::clicked, this, [this] {
             if (m_proc.state() == QProcess::NotRunning) start(); else stop();
@@ -370,9 +379,6 @@ public:
         connect(m_subBars, &QCheckBox::toggled, this, [this](bool) { applyView(); });
         connect(m_osdSize, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
-        connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
-            cmd({"set_property", "loop-file", on ? "inf" : "no"});
-        });
         connect(&m_proc, &QProcess::finished, this, [this] { onStopped(); });
         connect(&m_ssh, &QProcess::finished, this, [this](int code) { onSshFinished(code); });
         connect(&m_ssh, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
@@ -694,8 +700,9 @@ private:
                          "--sub-ass-force-margins=" + QString(m_subBars->isChecked() ? "yes" : "no"),
                          "--sub-color=" + subColorHex(),
                          "--sub-ass-style-overrides=" + subColorAss()};
-        if (m_loop->isChecked()) a << "--loop-file=inf";
-        if (m_loopPl->isChecked()) a << "--loop-playlist=inf";
+        if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
+        if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
+        if (m_shuffle->isChecked()) a << "--shuffle";
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
@@ -863,7 +870,8 @@ private:
     QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
     QSpinBox* m_sshPort;
     QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
-    QCheckBox *m_loop, *m_loopPl;
+    QComboBox* m_repeat;
+    QCheckBox* m_shuffle;
     QListWidget* m_list;
     QDialog* m_calDlg;
     QPushButton *m_prev, *m_next;

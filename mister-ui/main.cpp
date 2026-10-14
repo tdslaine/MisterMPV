@@ -38,7 +38,7 @@
 class Window : public QWidget {
 public:
     Window() {
-        setWindowTitle("mpv → MiSTer");
+        setWindowTitle("misterMPV");
         auto* root = new QVBoxLayout(this);
 
         auto* fileRow = new QHBoxLayout;

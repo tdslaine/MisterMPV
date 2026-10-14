@@ -223,7 +223,9 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     if (frame->current) {
         mp_image_clear_rc_inv(img, p->dst);
 
-        struct mp_image *src = frame->current;
+        // Crop a shallow copy: cropping frame->current itself would compound on every redraw.
+        struct mp_image srcimg = *frame->current;
+        struct mp_image *src = &srcimg;
         struct mp_rect src_rc = p->src;
         src_rc.x0 = MP_ALIGN_DOWN(src_rc.x0, src->fmt.align_x);
         src_rc.y0 = MP_ALIGN_DOWN(src_rc.y0, src->fmt.align_y);

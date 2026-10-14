@@ -16,6 +16,11 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QCollator>
+#include <QMenu>
+#include <QToolButton>
+#include <QRandomGenerator>
+#include <QDateTime>
+#include <random>
 #include <QUdpSocket>
 #include <QHostAddress>
 #include <QEventLoop>
@@ -81,6 +86,19 @@ public:
         m_prev = plPrev;
         m_next = plNext;
         for (auto* b : {browse, addDir, plRemove, plClear}) plRow->addWidget(b);
+        auto* sortBtn = new QPushButton("Sort ▾");
+        auto* sortMenu = new QMenu(sortBtn);
+        const struct { const char* label; const char* key; } sorts[] = {
+            {"By title / name", "title"}, {"By folder, then name", "folder"},
+            {"By date (oldest first)", "dateold"}, {"By date (newest first)", "datenew"},
+            {"Reverse order", "reverse"}, {"Randomize", "random"}};
+        for (const auto& so : sorts) {
+            const QString key = so.key;
+            sortMenu->addAction(so.label, this, [this, key] { sortPlaylist(key); });
+        }
+        sortBtn->setMenu(sortMenu);
+        sortBtn->setToolTip("Sort the playlist (like Winamp's Sort List); \"by folder\" groups entries per directory");
+        plRow->addWidget(sortBtn);
         plRow->addWidget(m_repeat);
         plRow->addWidget(m_shuffle);
         plRow->addStretch(1);
@@ -646,6 +664,71 @@ private:
         m_setupDlg->exec();
     }
 
+    // Winamp-style "Sort List". Stopped: reorder the local list. Running: mpv owns the order, so
+    // turn the wanted order into playlist-move commands (the current entry keeps playing);
+    // mpv reports the result back and the debounced refresh redraws the list.
+    void sortPlaylist(const QString& key) {
+        const int n = m_list->count();
+        if (n < 2) return;
+        if (key == "random" && running()) { cmd({"playlist-shuffle"}); return; }
+        struct E { int idx; QString path, name, dir; QDateTime mtime; bool local; };
+        QVector<E> es;
+        for (int i = 0; i < n; i++) {
+            E e;
+            e.idx = i;
+            e.path = m_list->item(i)->data(Qt::UserRole).toString();
+            const QFileInfo fi(e.path);
+            e.local = fi.exists();
+            e.name = e.local ? fi.fileName() : e.path;
+            e.dir = e.local ? fi.absolutePath() : QString();
+            if (e.local) e.mtime = fi.lastModified();
+            es << e;
+        }
+        QCollator coll;
+        coll.setNumericMode(true);
+        coll.setCaseSensitivity(Qt::CaseInsensitive);
+        auto byName = [&](const E& a, const E& b) { return coll.compare(a.name, b.name) < 0; };
+        if (key == "title") std::stable_sort(es.begin(), es.end(), byName);
+        else if (key == "folder")
+            std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
+                if (a.local != b.local) return a.local;            // streams/URLs go last
+                const int c = coll.compare(a.dir, b.dir);
+                return c != 0 ? c < 0 : byName(a, b);
+            });
+        else if (key == "dateold" || key == "datenew") {
+            const bool newest = key == "datenew";
+            std::stable_sort(es.begin(), es.end(), [&](const E& a, const E& b) {
+                if (a.local != b.local) return a.local;            // streams/URLs go last
+                return newest ? a.mtime > b.mtime : a.mtime < b.mtime;
+            });
+        } else if (key == "reverse") std::reverse(es.begin(), es.end());
+        else if (key == "random") {
+            std::mt19937 rng(QRandomGenerator::global()->generate());
+            std::shuffle(es.begin(), es.end(), rng);
+        }
+        if (!running()) {
+            QStringList paths;
+            for (const E& e : es) paths << e.path;
+            const QSignalBlocker b(m_list);
+            m_list->clear();
+            for (const QString& pth : paths) addLocal(pth);
+            savePlaylist();
+            return;
+        }
+        // running: move each wanted element into place, one playlist-move at a time
+        QVector<int> cur(n);
+        for (int i = 0; i < n; i++) cur[i] = i;
+        for (int i = 0; i < n; i++) {
+            const int want = es[i].idx;
+            const int j = cur.indexOf(want);
+            if (j != i) {
+                cmd(QJsonArray{"playlist-move", j, i});
+                cur.remove(j);
+                cur.insert(i, want);
+            }
+        }
+    }
+
     // Winamp-style "add dir": all media files below the folder, natural order (01, 02, ..., 10).
     void addFolder(const QString& path) {
         static const QStringList filters = {
@@ -889,7 +972,13 @@ private:
             } else if (n == "media-title") {
                 if (v.isString()) m_status->setText("▶ " + v.toString());
             } else if (n == "playlist") {
-                showPlaylist(v.toArray());
+                m_latestPl = v.toArray();
+                if (!m_plTimer) {
+                    m_plTimer = new QTimer(this);
+                    m_plTimer->setSingleShot(true);
+                    connect(m_plTimer, &QTimer::timeout, this, [this] { showPlaylist(m_latestPl); });
+                }
+                m_plTimer->start(60);   // many playlist-move commands in a row -> one refresh
             } else if (n == "track-list") {
                 fillTracks(v.toArray());
             }
@@ -926,6 +1015,8 @@ private:
     QCheckBox* m_subBars;
     bool m_syncing = false;
     bool m_hasPendingPl = false;
+    QJsonArray m_latestPl;
+    QTimer* m_plTimer = nullptr;
     QJsonArray m_pendingPl;
     QCheckBox* m_pad;
     QDialog* m_setupDlg;

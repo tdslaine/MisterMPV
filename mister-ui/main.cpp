@@ -207,10 +207,10 @@ public:
         btns->addWidget(plNext);
         btns->addWidget(m_loop);
 
+        root->addLayout(fileRow);
         root->addLayout(seekRow);
         root->addLayout(btns);
         root->addWidget(m_status);
-        root->addLayout(fileRow);
         root->addWidget(m_list, 1);
         root->addLayout(plRow);
         root->addWidget(outBox);

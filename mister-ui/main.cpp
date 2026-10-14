@@ -107,6 +107,15 @@ public:
             c->setMinimumContentsLength(52);
             c->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         }
+        m_vis = new QComboBox;
+        m_vis->addItem("Off (cover art / black)", "off");
+        m_vis->addItem("Spectrum (CQT)", "spectrum");
+        m_vis->addItem("Waves", "waves");
+        m_vis->addItem("Vectorscope", "vectorscope");
+        m_vis->addItem("Spectrogram", "spectrogram");
+        m_vis->addItem("Frequency bars", "bars");
+        m_vis->setCurrentIndex(qMax(0, m_vis->findData(m_set.value("visualizer", "off"))));
+        m_vis->setToolTip("Picture for audio-only files (mp3, flac, ...); video files are not affected.");
         m_subScale = new QSpinBox;
         m_subScale->setRange(20, 300);
         m_subScale->setSingleStep(10);
@@ -219,6 +228,7 @@ public:
         auto* tf = new QFormLayout(trackBox);
         tf->addRow("Audio:", m_audio);
         tf->addRow("Subtitles:", m_sub);
+        tf->addRow("Visualizer:", m_vis);
         tf->addRow("Subtitle size:", sliderRow(m_subScale));
         tf->addRow("Subtitle position:", sliderRow(m_subPos));
 
@@ -378,6 +388,10 @@ public:
         connect(m_subColor, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_subBars, &QCheckBox::toggled, this, [this](bool) { applyView(); });
         connect(m_osdSize, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
+        connect(m_vis, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            m_set.setValue("visualizer", m_vis->currentData().toString());
+            cmd({"script-message", "mister-vis", m_vis->currentData().toString()});
+        });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(&m_proc, &QProcess::finished, this, [this] { onStopped(); });
         connect(&m_ssh, &QProcess::finished, this, [this](int code) { onSshFinished(code); });
@@ -399,6 +413,13 @@ private:
     void setControlsEnabled(bool on) {
         for (auto* w : {(QWidget*)m_prev, (QWidget*)m_next, (QWidget*)m_pause, (QWidget*)m_seek, (QWidget*)m_audio, (QWidget*)m_sub})
             w->setEnabled(on);
+    }
+
+    QString visualizerScript() const {
+        const QString dir = QCoreApplication::applicationDirPath();
+        for (const QString& c : {dir + "/scripts/mister-visualizer.lua", dir + "/../../scripts/mister-visualizer.lua"})
+            if (QFileInfo::exists(c)) return QFileInfo(c).absoluteFilePath();
+        return {};
     }
 
     QString mpvPath() const {
@@ -641,6 +662,17 @@ private:
         if (running()) cmd(QJsonArray{"playlist-remove", row}); else delete m_list->takeItem(row);
     }
     void showPlaylist(const QJsonArray& pl) {
+        // Never rebuild the list while the user is dragging/pressing in it: Qt's drag loop still
+        // holds pointers to the items and clear() would free them under it.
+        if ((QApplication::mouseButtons() & Qt::LeftButton) && m_list->underMouse()) {
+            m_pendingPl = pl;
+            m_hasPendingPl = true;
+            QTimer::singleShot(200, this, [this] {
+                if (m_hasPendingPl) { m_hasPendingPl = false; showPlaylist(m_pendingPl); }
+            });
+            return;
+        }
+        m_hasPendingPl = false;
         const QSignalBlocker b(m_list);
         m_syncing = true;
         m_list->clear();
@@ -703,6 +735,9 @@ private:
         if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
         if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
         if (m_shuffle->isChecked()) a << "--shuffle";
+        const QString visScript = visualizerScript();
+        if (!visScript.isEmpty())
+            a << "--script=" + visScript << "--script-opts=mister-vis-mode=" + m_vis->currentData().toString();
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
@@ -864,13 +899,15 @@ private:
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
     bool m_syncing = false;
+    bool m_hasPendingPl = false;
+    QJsonArray m_pendingPl;
     QCheckBox* m_pad;
     QDialog* m_setupDlg;
     QComboBox* m_colorOrder;
     QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
     QSpinBox* m_sshPort;
     QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
-    QComboBox* m_repeat;
+    QComboBox *m_repeat, *m_vis;
     QCheckBox* m_shuffle;
     QListWidget* m_list;
     QDialog* m_calDlg;

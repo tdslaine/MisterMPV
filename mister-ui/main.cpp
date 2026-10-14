@@ -15,6 +15,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QCollator>
 #include <QUdpSocket>
 #include <QHostAddress>
 #include <QEventLoop>
@@ -49,13 +50,14 @@ public:
 
         auto* fileRow = new QHBoxLayout;
         m_file = new QLineEdit;
-        m_file->setPlaceholderText("file or URL");
-        auto* browse = new QPushButton("Load…");
+        m_file->setPlaceholderText("URL (YouTube, stream, ...) or path");
+        auto* browse = new QPushButton("+ File(s)");
         browse->setToolTip("Pick one or more files (also network shares) and add them to the playlist");
+        auto* addDir = new QPushButton("+ Folder");
+        addDir->setToolTip("Add all media files of a folder (including subfolders)");
         auto* addUrl = new QPushButton("Add to PL");
         addUrl->setToolTip("Add the file/URL in the box to the playlist");
         fileRow->addWidget(m_file);
-        fileRow->addWidget(browse);
         fileRow->addWidget(addUrl);
 
         m_list = new QListWidget;
@@ -78,7 +80,7 @@ public:
         m_shuffle->setToolTip("Play the playlist in random order (switch off to restore the original order)");
         m_prev = plPrev;
         m_next = plNext;
-        for (auto* b : {plRemove, plClear}) plRow->addWidget(b);
+        for (auto* b : {browse, addDir, plRemove, plClear}) plRow->addWidget(b);
         plRow->addWidget(m_repeat);
         plRow->addWidget(m_shuffle);
         plRow->addStretch(1);
@@ -312,6 +314,13 @@ public:
             const QList<QUrl> urls = QFileDialog::getOpenFileUrls(
                 this, "Add media", QUrl(), QString(), nullptr, {}, {"file", "smb", "sftp", "ftp", "davs", "webdav"});
             for (const QUrl& u : urls) addEntry(resolveLocation(u.isLocalFile() ? u.toLocalFile() : u.toString()));
+        });
+        connect(addDir, &QPushButton::clicked, this, [this] {
+            const QUrl dir = QFileDialog::getExistingDirectoryUrl(
+                this, "Add folder", QUrl(), QFileDialog::ShowDirsOnly,
+                {"file", "smb", "sftp", "ftp", "davs", "webdav"});
+            if (dir.isEmpty()) return;
+            addFolder(resolveLocation(dir.isLocalFile() ? dir.toLocalFile() : dir.toString()));
         });
         connect(addUrl, &QPushButton::clicked, this, [this] {
             const QString f = m_file->text().trimmed();
@@ -635,6 +644,23 @@ private:
         m_coreNlc->setText(m_set.value("corePathNlc", kDefaultNlcCore).toString());
         m_coreOrig->setText(m_set.value("corePathOrig", kDefaultOrigCore).toString());
         m_setupDlg->exec();
+    }
+
+    // Winamp-style "add dir": all media files below the folder, natural order (01, 02, ..., 10).
+    void addFolder(const QString& path) {
+        static const QStringList filters = {
+            "*.mkv", "*.mp4", "*.avi", "*.mov", "*.webm", "*.mpg", "*.mpeg", "*.ts", "*.m2ts", "*.wmv",
+            "*.flv", "*.m4v", "*.ogv", "*.vob", "*.mp3", "*.flac", "*.ogg", "*.opus", "*.wav", "*.m4a",
+            "*.aac", "*.wma", "*.ape", "*.mka"};
+        QStringList files;
+        QDirIterator it(path, filters, QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+        while (it.hasNext() && files.size() < 5000) files << it.next();
+        QCollator coll;
+        coll.setNumericMode(true);
+        coll.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(files.begin(), files.end(), [&](const QString& a, const QString& b) { return coll.compare(a, b) < 0; });
+        for (const QString& f : files) addEntry(f);
+        m_status->setText(QString("Added %1 files from %2").arg(files.size()).arg(QFileInfo(path).fileName()));
     }
 
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }

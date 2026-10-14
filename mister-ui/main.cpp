@@ -328,6 +328,39 @@ public:
         root->addWidget(m_status);
         root->addLayout(seekRow);
         root->addLayout(btns);
+
+        m_vol = new QSpinBox;
+        m_vol->setRange(0, 130);
+        m_vol->setSuffix(" %");
+        m_vol->setValue(m_set.value("volume", 100).toInt());
+        m_vol->setToolTip("Volume (above 100 % is software gain)");
+        m_speed = new QDoubleSpinBox;
+        m_speed->setRange(0.25, 4.0);
+        m_speed->setDecimals(2);
+        m_speed->setSingleStep(0.05);
+        m_speed->setSuffix(" ×");
+        m_speed->setValue(1.0);
+        m_speed->setToolTip("Playback speed (pitch is corrected). Resets to 1× on the next start.");
+        auto* speedReset = new QPushButton("1×");
+        speedReset->setMaximumWidth(40);
+        connect(speedReset, &QPushButton::clicked, this, [this] { m_speed->setValue(1.0); });
+        auto* volRow = new QHBoxLayout;
+        volRow->addWidget(new QLabel("Volume"));
+        volRow->addWidget(sliderRow(m_vol), 3);
+        volRow->addSpacing(14);
+        volRow->addWidget(new QLabel("Speed"));
+        volRow->addWidget(sliderRow(m_speed, 100), 3);
+        volRow->addWidget(speedReset);
+        root->addLayout(volRow);
+        connect(m_vol, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
+            if (m_remoteVS) return;
+            m_set.setValue("volume", v);
+            cmd({"set_property", "volume", v});
+        });
+        connect(m_speed, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
+            if (m_remoteVS) return;
+            cmd({"set_property", "speed", v});
+        });
         root->addSpacing(14);        // air between the transport buttons and the playlist
         root->addWidget(plBox, 1);
         root->addWidget(outBox);
@@ -503,12 +536,12 @@ private:
         connect(s, qOverload<int>(&QSpinBox::valueChanged), sl, &QSlider::setValue);
         return rowOf(sl, s);
     }
-    QWidget* sliderRow(QDoubleSpinBox* s) {   // 0.1 steps
+    QWidget* sliderRow(QDoubleSpinBox* s, int scale = 10) {   // slider in 1/scale steps
         auto* sl = new QSlider(Qt::Horizontal);
-        sl->setRange(int(s->minimum() * 10), int(s->maximum() * 10));
-        sl->setValue(int(s->value() * 10));
-        connect(sl, &QSlider::valueChanged, s, [s](int v) { s->setValue(v / 10.0); });
-        connect(s, qOverload<double>(&QDoubleSpinBox::valueChanged), sl, [sl](double v) { sl->setValue(int(v * 10 + 0.5)); });
+        sl->setRange(qRound(s->minimum() * scale), qRound(s->maximum() * scale));
+        sl->setValue(qRound(s->value() * scale));
+        connect(sl, &QSlider::valueChanged, s, [s, scale](int v) { s->setValue(double(v) / scale); });
+        connect(s, qOverload<double>(&QDoubleSpinBox::valueChanged), sl, [sl, scale](double v) { sl->setValue(qRound(v * scale)); });
         return rowOf(sl, s);
     }
     static QWidget* rowOf(QSlider* sl, QWidget* spin) {
@@ -854,6 +887,7 @@ private:
                          "--sub-ass-style-overrides=" + subColorAss()};
         if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
         if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
+        a << "--volume=" + QString::number(m_vol->value());
         a << "--script-opts=mister-shuffle=" + QString(m_shuffle->isChecked() ? "yes" : "no") +
              ",mister-vis-mode=" + m_vis->currentData().toString() +
              ",mister-track=" + QString(m_trackInfo->isChecked() ? "yes" : "no") +
@@ -891,7 +925,7 @@ private:
         m_status->setText("playing");
         applyView();
         int id = 1;
-        for (const char* p : {"time-pos", "duration", "pause", "track-list", "playlist", "media-title"})
+        for (const char* p : {"time-pos", "duration", "pause", "track-list", "playlist", "media-title", "volume", "speed"})
             cmd({"observe_property", id++, p});
     }
 
@@ -980,6 +1014,14 @@ private:
                 }
             } else if (n == "pause") {
                 m_pause->setText(v.toBool() ? "▶" : "⏸");
+            } else if (n == "volume" && v.isDouble()) {   // gamepad / other changes follow the slider
+                m_remoteVS = true;
+                m_vol->setValue(qRound(v.toDouble()));
+                m_remoteVS = false;
+            } else if (n == "speed" && v.isDouble()) {
+                m_remoteVS = true;
+                m_speed->setValue(v.toDouble());
+                m_remoteVS = false;
             } else if (n == "media-title") {
                 if (v.isString()) m_status->setText("▶ " + v.toString());
             } else if (n == "playlist") {
@@ -1025,6 +1067,7 @@ private:
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
     bool m_syncing = false;
+    bool m_remoteVS = false;   // volume/speed value came from mpv: do not send it back
     bool m_hasPendingPl = false;
     QJsonArray m_latestPl;
     QTimer* m_plTimer = nullptr;
@@ -1034,6 +1077,8 @@ private:
     QComboBox* m_colorOrder;
     QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
     QSpinBox* m_sshPort;
+    QSpinBox *m_vol;
+    QDoubleSpinBox* m_speed;
     QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QComboBox *m_repeat, *m_vis, *m_trackPos;
     QCheckBox* m_trackInfo;

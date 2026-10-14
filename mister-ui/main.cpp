@@ -309,8 +309,10 @@ private:
     QString mpvPath() const {
         const QString env = qEnvironmentVariable("MPV_MISTER");
         if (!env.isEmpty()) return env;
-        const QString rel = QCoreApplication::applicationDirPath() + "/../../build/mpv";
-        return QFileInfo::exists(rel) ? rel : "mpv";
+        const QString dir = QCoreApplication::applicationDirPath();
+        for (const QString& c : {dir + "/mpv", dir + "/../../build/mpv"})   // next to us, then the build tree
+            if (QFileInfo::exists(c)) return c;
+        return "mpv";
     }
 
     // KDE network locations (smb://user@host/share/file, sftp://..., ...) are not playable by mpv

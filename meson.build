@@ -53,10 +53,18 @@ features = {
 
 
 # generic sources
-# MiSTer (GroovyNLC) output: groovy-mister-zig static library from the MiSTerCast checkout.
+# MiSTer (GroovyNLC) output: groovy-mister-zig static library (sources vendored in
+# third_party/groovy-mister-zig, built with zig >= 0.15.2 when the .a is missing).
 gmz_dir = get_option('mister-gmz-dir')
 if gmz_dir == ''
-    gmz_dir = meson.project_source_root() / '../MiSTerCast/groovy-mister-zig'
+    gmz_dir = meson.project_source_root() / 'third_party/groovy-mister-zig'
+endif
+fs = import('fs')
+if not fs.exists(gmz_dir / 'zig-out/lib/libgroovy-mister-zig.a')
+    zig = find_program('zig', required: true)
+    message('Building groovy-mister-zig with zig (first configure only)...')
+    run_command(zig, 'build', '-Doptimize=ReleaseFast', '--prefix', gmz_dir / 'zig-out',
+                check: true, cwd: gmz_dir)
 endif
 gmz_lib = meson.get_compiler('c').find_library('groovy-mister-zig', dirs: [gmz_dir / 'zig-out/lib'], static: true)
 dependencies += [gmz_lib, declare_dependency(compile_args: ['-I' + gmz_dir / 'include'],

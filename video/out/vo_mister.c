@@ -24,6 +24,7 @@
 #include "vo.h"
 #include "mister_conn.h"
 #include "mister_calib.h"
+#include "mister_pad.h"
 #include "options/m_config.h"
 #include "video/csputils.h"
 
@@ -32,6 +33,7 @@ struct priv {
     char *modeline;
     int near_lvl;
     int field_order;          // 0 = TFF, 1 = BFF
+    bool pad;                 // MiSTer gamepad controls playback
     int flicker;              // 0 off, 1 light, 2 full
 
     bool connected;
@@ -279,6 +281,8 @@ static int preinit(struct vo *vo)
         return -1;
     }
     p->connected = true;
+    if (p->pad)
+        mister_pad_start(vo->input_ctx, p->host);
     p->eq = mp_csp_equalizer_create(p, vo->global);
     p->fx = m_config_cache_alloc(p, vo->global, &mister_fx_conf);
     update_fx(vo);
@@ -323,12 +327,13 @@ const struct vo_driver video_out_mister = {
     .flip_page = flip_page,
     .uninit = uninit,
     .priv_size = sizeof(struct priv),
-    .priv_defaults = &(const struct priv) { .near_lvl = 1, .flicker = 1 },
+    .priv_defaults = &(const struct priv) { .near_lvl = 1, .flicker = 1, .pad = true },
     .options = (const struct m_option[]) {
         {"host", OPT_STRING(host)},
         {"modeline", OPT_STRING(modeline)},
         {"near", OPT_INT(near_lvl), M_RANGE(0, 3)},
         {"field-order", OPT_CHOICE(field_order, {"tff", 0}, {"bff", 1})},
+        {"pad", OPT_BOOL(pad)},
         {"flicker", OPT_CHOICE(flicker, {"off", 0}, {"light", 1}, {"full", 2})},
         {0}
     },

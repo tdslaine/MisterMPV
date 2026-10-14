@@ -153,14 +153,30 @@ public:
         addPair(1, "Modeline:", m_modeline, "Format:", m_aspect);
         addPair(2, "Field order:", m_field, "Flicker filter:", m_flicker);
         auto* testBtn = new QPushButton("Test connection");
-        auto* coreBtn = new QPushButton("Launch Groovy core");
+        m_core = new QComboBox;
+        m_core->addItems({"GroovyNLC (default)", "Groovy (original)"});
+        m_core->setCurrentIndex(m_set.value("coreKind", 0).toInt());
+        m_core->setToolTip("Which core \"Launch core\" loads. misterMPV streams with the NLC codec, "
+                           "so it needs GroovyNLC; the original Groovy core cannot decode it.");
+        connect(m_core, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int i) { m_set.setValue("coreKind", i); });
+        auto* coreBtn = new QPushButton("Launch core");
         auto* sshBtn = new QPushButton("Setup…");
         sshBtn->setToolTip("SSH login, SSH port and core path for \"Launch Groovy core\"");
         testBtn->setToolTip("Sends a status request to the MiSTer (UDP 32100) and waits for the reply");
-        coreBtn->setToolTip("Over SSH: load the newest /media/fat/_Utility/Groovy_*.rbf on the MiSTer");
+        coreBtn->setToolTip("Over SSH: load the selected core on the MiSTer (newest matching file)");
         auto* misterRow = new QHBoxLayout;
         misterRow->addWidget(testBtn);
         misterRow->addWidget(coreBtn);
+        misterRow->addWidget(m_core);
+        m_pad = new QCheckBox("Gamepad");
+        m_pad->setChecked(m_set.value("pad", true).toBool());
+        m_pad->setToolTip("Control playback with the pad on the MiSTer:\n"
+                          "D-pad left/right: seek 10 s (hold = scan), up/down: volume\n"
+                          "B1/Start: pause, B2: stop, B3: audio track, B4: subtitle track\n"
+                          "L1/R1: previous/next, L2/R2: seek 60 s, Select: status on TV\n"
+                          "(applies on the next Play)");
+        misterRow->addWidget(m_pad);
         misterRow->addWidget(sshBtn);
         og->addLayout(misterRow, 3, 0, 1, 4);
         connect(testBtn, &QPushButton::clicked, this, [this] { testConnection(); });
@@ -424,7 +440,7 @@ private:
             sock.readDatagram(nullptr, 0);
             m_status->setText(QString("MiSTer answered in %1 ms - Groovy core is running").arg(el.elapsed()));
         } else {
-            m_status->setText("No reply from the MiSTer - core not loaded (try \"Launch Groovy core\") or wrong IP?");
+            m_status->setText("No reply from the MiSTer - core not loaded (try \"Launch core\") or wrong IP?");
         }
     }
 
@@ -449,8 +465,10 @@ private:
         m_ssh.setStandardInputFile(QProcess::nullDevice());
         const QString user = m_set.value("sshUser", "root").toString();
         const QString port = QString::number(m_set.value("sshPort", 22).toInt());
-        QString pat = m_set.value("corePath", kDefaultCore).toString().trimmed();
-        if (pat.isEmpty()) pat = kDefaultCore;
+        const bool nlc = m_core->currentIndex() == 0;
+        QString pat = m_set.value(nlc ? "corePathNlc" : "corePathOrig", nlc ? kDefaultNlcCore : kDefaultOrigCore)
+                          .toString().trimmed();
+        if (pat.isEmpty()) pat = nlc ? kDefaultNlcCore : kDefaultOrigCore;
         const QString remote =
             "f=$(ls -t " + pat + " 2>/dev/null | head -1); [ -n \"$f\" ] || exit 3; "
             "echo \"load_core $f\" > /dev/MiSTer_cmd";
@@ -461,14 +479,15 @@ private:
     void onSshFinished(int code) {
         if (!m_askpass.isEmpty()) { QFile::remove(m_askpass); m_askpass.clear(); }
         if (code == 0)
-            m_status->setText("Groovy core loading - give it a few seconds, then \"Test connection\"");
+            m_status->setText((m_core->currentIndex() == 0 ? "GroovyNLC" : "Groovy") + QString(" core loading - give it a few seconds, then \"Test connection\""));
         else if (code == 3)
             m_status->setText("No core file found on the MiSTer (check the core path in Setup…)");
         else
             m_status->setText("SSH failed (" + QString::number(code) + "): " +
                               QString::fromUtf8(m_ssh.readAllStandardError()).trimmed().left(160));
     }
-    static inline const QString kDefaultCore = "/media/fat/_Utility/Groovy_*.rbf";
+    static inline const QString kDefaultNlcCore = "/media/fat/_Utility/GroovyNLC_*.rbf";
+    static inline const QString kDefaultOrigCore = "/media/fat/_Utility/Groovy_*.rbf";
 
     void sshDialog() {
         QDialog d(this);
@@ -481,12 +500,15 @@ private:
         auto* port = new QSpinBox;
         port->setRange(1, 65535);
         port->setValue(m_set.value("sshPort", 22).toInt());
-        auto* core = new QLineEdit(m_set.value("corePath", kDefaultCore).toString());
-        core->setToolTip("File (or glob) of the Groovy core on the MiSTer; the newest match is loaded.");
+        auto* core = new QLineEdit(m_set.value("corePathNlc", kDefaultNlcCore).toString());
+        core->setToolTip("File (or glob) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
+        auto* coreOrig = new QLineEdit(m_set.value("corePathOrig", kDefaultOrigCore).toString());
+        coreOrig->setToolTip("File (or glob) of the original Groovy core; the newest match is loaded.");
         f->addRow("SSH user:", u);
         f->addRow("SSH password:", pw);
         f->addRow("SSH port:", port);
-        f->addRow("Core file:", core);
+        f->addRow("GroovyNLC core:", core);
+        f->addRow("Groovy core (original):", coreOrig);
         f->addRow(new QLabel("Streaming uses UDP 32100 (fixed by the Groovy core)."));
         auto* btns = new QHBoxLayout;
         auto* defaults = new QPushButton("Defaults");
@@ -496,7 +518,7 @@ private:
         btns->addWidget(ok);
         f->addRow(btns);
         connect(defaults, &QPushButton::clicked, &d, [=] {
-            u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultCore);
+            u->setText("root"); pw->setText("1"); port->setValue(22); core->setText(kDefaultNlcCore); coreOrig->setText(kDefaultOrigCore);
         });
         connect(ok, &QPushButton::clicked, &d, &QDialog::accept);
         d.setMinimumWidth(440);
@@ -504,7 +526,8 @@ private:
             m_set.setValue("sshUser", u->text().trimmed());
             m_set.setValue("sshPass", pw->text());
             m_set.setValue("sshPort", port->value());
-            m_set.setValue("corePath", core->text().trimmed());
+            m_set.setValue("corePathNlc", core->text().trimmed());
+            m_set.setValue("corePathOrig", coreOrig->text().trimmed());
         }
     }
 
@@ -565,6 +588,7 @@ private:
         m_set.setValue("modeline", m_modeline->currentText());
         m_set.setValue("near", m_near->currentIndex());
         m_set.setValue("fieldOrder", m_field->currentIndex());
+        m_set.setValue("pad", m_pad->isChecked());
         m_set.setValue("flicker", m_flicker->currentIndex());
         const QString ml = m_modeline->currentIndex() == 0 ? "auto" : m_modeline->currentText();
         m_sockPath = QDir::temp().filePath(QString("mpv-mister-%1.sock").arg(QCoreApplication::applicationPid()));
@@ -572,6 +596,7 @@ private:
         QStringList a = {"--no-config", "--vo=mister", "--ao=mister",
                          "--vo-mister-host=" + m_host->text(), "--vo-mister-modeline=" + ml,
                          "--vo-mister-near=" + QString::number(m_near->currentIndex()),
+                         "--vo-mister-pad=" + QString(m_pad->isChecked() ? "yes" : "no"),
                          "--vo-mister-field-order=" + QString(m_field->currentIndex() ? "bff" : "tff"),
                          "--vo-mister-flicker=" + QString(m_flicker->currentIndex() == 2 ? "full"
                                                           : m_flicker->currentIndex() == 1 ? "light" : "off"),
@@ -718,6 +743,8 @@ private:
     QDoubleSpinBox *m_hsize, *m_vsize;
     QSpinBox *m_hoff, *m_voff;
     QCheckBox* m_calib;
+    QComboBox* m_core;
+    QCheckBox* m_pad;
     QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
     QListWidget* m_list;

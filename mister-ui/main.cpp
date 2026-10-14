@@ -74,8 +74,8 @@ public:
         m_list->setDragDropMode(QAbstractItemView::InternalMove);
         m_list->setDefaultDropAction(Qt::MoveAction);
         auto* plRow = new QHBoxLayout;
-        auto* plPrev = new QPushButton("⏮ Prev");
-        auto* plNext = new QPushButton("Next ⏭");
+        auto* plPrev = new QPushButton("◀◀  Prev");
+        auto* plNext = new QPushButton("Next  ▶▶");
         auto* plRemove = new QPushButton("Remove");
         auto* plClear = new QPushButton("Clear");
         m_repeat = new QComboBox;
@@ -307,9 +307,13 @@ public:
 
         m_play = new QPushButton("▶ Play");
         m_pause = new QPushButton("⏸");
-        auto* back = new QPushButton("⏪ 10s");
-        auto* fwd = new QPushButton("10s ⏩");
+        auto* back = new QPushButton("−10 s");
+        auto* fwd = new QPushButton("+10 s");
         auto* btns = new QHBoxLayout;
+        for (auto* b : {(QPushButton*)plPrev, (QPushButton*)plNext, back, fwd, m_pause}) {
+            b->setMinimumWidth(78);
+            b->setMaximumWidth(78);
+        }
         btns->addWidget(m_play, 1);
         btns->addWidget(plPrev);
         btns->addWidget(back);

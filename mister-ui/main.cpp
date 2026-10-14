@@ -61,7 +61,9 @@ public:
         m_list = new QListWidget;
         m_list->setMinimumHeight(110);
         m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
-        m_list->setToolTip("Playlist - double-click to play an entry");
+        m_list->setToolTip("Playlist - double-click to play an entry, drag to reorder");
+        m_list->setDragDropMode(QAbstractItemView::InternalMove);
+        m_list->setDefaultDropAction(Qt::MoveAction);
         auto* plRow = new QHBoxLayout;
         auto* plPrev = new QPushButton("⏮ Prev");
         auto* plNext = new QPushButton("Next ⏭");
@@ -321,6 +323,20 @@ public:
         });
         connect(plPrev, &QPushButton::clicked, this, [this] { cmd({"playlist-prev"}); });
         connect(plNext, &QPushButton::clicked, this, [this] { cmd({"playlist-next"}); });
+        // Drag & drop reorder: while mpv runs it owns the order, so mirror each move there
+        // (it then reports the new list back); otherwise just persist the local order.
+        connect(m_list->model(), &QAbstractItemModel::rowsMoved, this,
+                [this](const QModelIndex&, int start, int end, const QModelIndex&, int dest) {
+            if (m_syncing) return;
+            if (running()) {
+                const int n = end - start + 1;
+                if (dest > end)
+                    for (int i = 0; i < n; i++) cmd(QJsonArray{"playlist-move", start, dest});
+                else
+                    for (int i = 0; i < n; i++) cmd(QJsonArray{"playlist-move", start + i, dest + i});
+            }
+            savePlaylist();
+        });
         connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* it) {
             const int r = m_list->row(it);
             if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r});
@@ -588,6 +604,7 @@ private:
     }
     void showPlaylist(const QJsonArray& pl) {
         const QSignalBlocker b(m_list);
+        m_syncing = true;
         m_list->clear();
         int cur = -1;
         for (int i = 0; i < pl.size(); i++) {
@@ -605,6 +622,7 @@ private:
             m_list->item(i)->setText((i == cur ? "▶ " : "") + m_list->item(i)->text());
         }
         if (cur >= 0) m_list->scrollToItem(m_list->item(cur));
+        m_syncing = false;
         savePlaylist();
     }
 
@@ -801,6 +819,7 @@ private:
     QCheckBox* m_calib;
     QComboBox *m_core, *m_subColor, *m_scanStyle;
     QCheckBox* m_subBars;
+    bool m_syncing = false;
     QCheckBox* m_pad;
     QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;

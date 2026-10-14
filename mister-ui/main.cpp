@@ -154,6 +154,13 @@ public:
         m_osdSize->setToolTip("Height of the on-screen text (gamepad status, volume, track names) in raster "
                               "pixels, independent of the modeline. Bold with a heavy outline so it stays "
                               "readable at 240p.");
+        m_trackInfo = new QCheckBox("Show artist / title for music");
+        m_trackInfo->setChecked(m_set.value("trackInfo", false).toBool());
+        m_trackInfo->setToolTip("Permanent artist + title text on the TV while an audio-only file plays "
+                                "(from the tags, else the file name). Uses the OSD text size.");
+        m_trackPos = new QComboBox;
+        m_trackPos->addItems({"Bottom", "Top"});
+        m_trackPos->setCurrentIndex(m_set.value("trackPos", 0).toInt());
         m_subBars = new QCheckBox("Subtitles in black bars");
         m_subBars->setChecked(m_set.value("subBars", true).toBool());
         m_subBars->setToolTip("Letterboxed films: put subtitles into the black bar below the picture "
@@ -415,6 +422,14 @@ public:
         connect(m_subColor, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_subBars, &QCheckBox::toggled, this, [this](bool) { applyView(); });
         connect(m_osdSize, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
+        auto applyTrack = [this] {
+            m_set.setValue("trackInfo", m_trackInfo->isChecked());
+            m_set.setValue("trackPos", m_trackPos->currentIndex());
+            cmd({"script-message", "mister-track", m_trackInfo->isChecked() ? "yes" : "no",
+                 m_trackPos->currentIndex() ? "top" : "bottom"});
+        };
+        connect(m_trackInfo, &QCheckBox::toggled, this, applyTrack);
+        connect(m_trackPos, qOverload<int>(&QComboBox::currentIndexChanged), this, applyTrack);
         connect(m_vis, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             m_set.setValue("visualizer", m_vis->currentData().toString());
             cmd({"script-message", "mister-vis", m_vis->currentData().toString()});
@@ -595,6 +610,8 @@ private:
         m_colorOrder->setToolTip("Channel order sent to the MiSTer. If skin tones look blue (or red tinted), "
                                  "flip it. Applies on the next Play.");
         df->addRow("Colour order:", m_colorOrder);
+        df->addRow("", m_trackInfo);
+        df->addRow("Artist / title position:", m_trackPos);
         lay->addWidget(disp);
 
         auto* ctl = new QGroupBox("Control");
@@ -632,7 +649,7 @@ private:
         connect(defaults, &QPushButton::clicked, m_setupDlg, [this] {
             m_colorOrder->setCurrentIndex(0); m_sshUser->setText("root"); m_sshPass->setText("1");
             m_sshPort->setValue(22); m_coreNlc->setText(kDefaultNlcCore); m_coreOrig->setText(kDefaultOrigCore);
-            m_osdSize->setValue(28); m_subColor->setCurrentIndex(0); m_subBars->setChecked(true); m_pad->setChecked(true);
+            m_osdSize->setValue(28); m_trackInfo->setChecked(false); m_trackPos->setCurrentIndex(0); m_subColor->setCurrentIndex(0); m_subBars->setChecked(true); m_pad->setChecked(true);
         });
         connect(ok, &QPushButton::clicked, m_setupDlg, &QDialog::accept);
         connect(m_setupDlg, &QDialog::accepted, this, [this] {
@@ -837,7 +854,9 @@ private:
         if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
         if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
         a << "--script-opts=mister-shuffle=" + QString(m_shuffle->isChecked() ? "yes" : "no") +
-             ",mister-vis-mode=" + m_vis->currentData().toString();
+             ",mister-vis-mode=" + m_vis->currentData().toString() +
+             ",mister-track=" + QString(m_trackInfo->isChecked() ? "yes" : "no") +
+             ",mister-track-pos=" + QString(m_trackPos->currentIndex() ? "top" : "bottom");
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
         for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(Qt::UserRole).toString();
@@ -1015,7 +1034,8 @@ private:
     QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
     QSpinBox* m_sshPort;
     QSpinBox *m_osdSize, *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
-    QComboBox *m_repeat, *m_vis;
+    QComboBox *m_repeat, *m_vis, *m_trackPos;
+    QCheckBox* m_trackInfo;
     QCheckBox* m_shuffle;
     QListWidget* m_list;
     QDialog* m_calDlg;

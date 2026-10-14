@@ -256,6 +256,7 @@ sources = files(
     'video/out/vo_null.c',
     'video/out/vo_mister.c',
     'video/out/mister_conn.c',
+    'video/out/mister_calib.c',
     'video/out/nlc_codec.cpp',
     'video/out/vo_tct.c',
     'video/out/vo_kitty.c',

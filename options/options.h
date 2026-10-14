@@ -219,6 +219,7 @@ typedef struct MPOpts {
     char *media_title;
 
     struct mp_csp_equalizer_opts *video_equalizer;
+    struct mister_fx_opts *mister_fx;
 
     int stop_screensaver;
     int cursor_autohide_delay;

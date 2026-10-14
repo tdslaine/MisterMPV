@@ -9,6 +9,10 @@
 #include <unistd.h>
 
 #include "mister_conn.h"
+#include "options/m_option.h"
+#include "options/m_config.h"
+#include "options/options.h"
+#include <math.h>
 #include "nlc_codec.h"
 #include "groovy_mister.h"
 
@@ -37,12 +41,82 @@ static struct {
     struct mister_info info;
     uint8_t *frame;              // full frame, packed RGB24
     uint8_t *field;              // one field, packed RGB24
+    uint8_t *fx_buf;             // field/frame after apply_fx
     uint8_t *nlc_buf;
     size_t nlc_cap;
     pthread_t thread;
     atomic_bool stop;
+    atomic_int bff;              // 1 = bottom field first
+    atomic_int flicker;          // 0 off, 1 light, 2 full
+    atomic_int fx_bri, fx_con, fx_sat, fx_blk, fx_scn;  // levels, x100, x100, levels, percent
 } G = { .lock = PTHREAD_MUTEX_INITIALIZER, .gmz_lock = PTHREAD_MUTEX_INITIALIZER,
-        .frame_lock = PTHREAD_MUTEX_INITIALIZER };
+        .frame_lock = PTHREAD_MUTEX_INITIALIZER,
+        .fx_con = 100, .fx_sat = 100 };
+
+#define OPT_BASE_STRUCT struct mister_fx_opts
+const struct m_sub_options mister_fx_conf = {
+    .opts = (const m_option_t[]) {
+        {"mister-blacklevel", OPT_INT(blacklevel), M_RANGE(0, 30)},
+        {"mister-scanlines", OPT_INT(scanlines), M_RANGE(0, 100)},
+        {"mister-hsize", OPT_DOUBLE(hsize), M_RANGE(80, 100)},
+        {"mister-vsize", OPT_DOUBLE(vsize), M_RANGE(80, 100)},
+        {"mister-hoffset", OPT_INT(hoffset), M_RANGE(-72, 72)},
+        {"mister-voffset", OPT_INT(voffset), M_RANGE(-28, 28)},
+        {"mister-calibrate", OPT_BOOL(calibrate)},
+        {0}
+    },
+    .defaults = &(const struct mister_fx_opts){ .hsize = 100, .vsize = 100 },
+    .size = sizeof(struct mister_fx_opts),
+    .change_flags = UPDATE_VIDEO,
+};
+
+void mister_set_fx(double brightness, double contrast, double saturation, int black, int scanlines)
+{
+    atomic_store(&G.fx_bri, (int)lround(brightness * 1.28));          // +-100 -> +-128 levels
+    atomic_store(&G.fx_con, (int)lround(contrast + 100.0));           // x100 factor
+    atomic_store(&G.fx_sat, (int)lround(saturation + 100.0));         // x100 factor
+    atomic_store(&G.fx_blk, black);
+    atomic_store(&G.fx_scn, scanlines);
+}
+
+static inline uint8_t clamp8(int v) { return v < 0 ? 0 : v > 255 ? 255 : (uint8_t)v; }
+
+// Colour/scanline pass: copies the w*h RGB24 image src -> dst.
+static void apply_fx(uint8_t *dst, const uint8_t *src, int w, int h)
+{
+    static uint8_t lut[256];
+    static int lut_key[3] = {-1, -1, -1};
+    const int bri = atomic_load(&G.fx_bri), con = atomic_load(&G.fx_con);
+    const int blk = atomic_load(&G.fx_blk), sat = atomic_load(&G.fx_sat);
+    const int scn = atomic_load(&G.fx_scn);
+    if (lut_key[0] != bri || lut_key[1] != con || lut_key[2] != blk) {
+        for (int v = 0; v < 256; v++) {          // black level -> brightness -> contrast
+            int x = clamp8(v + blk);
+            x = clamp8(x + bri);
+            x = clamp8((int)(((x - 128) * (con / 100.0f)) + 128.5f));
+            lut[v] = (uint8_t)x;
+        }
+        lut_key[0] = bri; lut_key[1] = con; lut_key[2] = blk;
+    }
+    const float sf = sat / 100.0f;
+    const float dark = 1.0f - scn / 100.0f;
+    for (int y = 0; y < h; y++) {
+        const uint8_t *s = src + (size_t)y * w * 3;
+        uint8_t *d = dst + (size_t)y * w * 3;
+        const bool line = (y & 1) && scn > 0;
+        for (int x = 0; x < w; x++, s += 3, d += 3) {
+            int b = lut[s[0]], g = lut[s[1]], r = lut[s[2]];   // wire order is B,G,R
+            if (sat != 100) {
+                const float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                r = clamp8((int)(l + (r - l) * sf));
+                g = clamp8((int)(l + (g - l) * sf));
+                b = clamp8((int)(l + (b - l) * sf));
+            }
+            if (line) { r = (int)(r * dark); g = (int)(g * dark); b = (int)(b * dark); }
+            d[0] = (uint8_t)b; d[1] = (uint8_t)g; d[2] = (uint8_t)r;
+        }
+    }
+}
 
 static nlc_params nlc_p(int w, int h, int near_lvl)
 {
@@ -90,7 +164,8 @@ static void *sender(void *arg)
     const int h = G.info.interlaced ? G.info.height / 2 : G.info.height;
     const nlc_params np = nlc_p(w, h, G.near_lvl);
     uint32_t frame = 0;
-    uint8_t field = 0;
+    int bff = atomic_load(&G.bff);
+    uint8_t field = bff ? 1 : 0;
     uint64_t enc_ns = 0, send_ns = 0;
     int reconnects = 0;
     uint64_t last_ok = now_ns();
@@ -120,11 +195,33 @@ static void *sender(void *arg)
         const uint8_t *src;
         pthread_mutex_lock(&G.frame_lock);
         if (G.info.interlaced) {
-            for (int y = 0; y < h; y++)
-                memcpy(G.field + y * row, G.frame + ((size_t)y * 2 + field) * row, row);
+            const int nb = atomic_load(&G.bff);
+            if (nb != bff) { bff = nb; field ^= 1; }
+            const int fl = atomic_load(&G.flicker);
+            const int fh = G.info.height;
+            for (int y = 0; y < h; y++) {
+                const int r = y * 2 + field;
+                const uint8_t *mid = G.frame + (size_t)r * row;
+                uint8_t *dst = G.field + y * row;
+                if (!fl) { memcpy(dst, mid, row); continue; }
+                // vertical 1-6-1 / 1-2-1 across the full frame (mirrored at the edges)
+                const uint8_t *up = G.frame + (size_t)(r > 0 ? r - 1 : r + 1) * row;
+                const uint8_t *dn = G.frame + (size_t)(r < fh - 1 ? r + 1 : r - 1) * row;
+                if (fl == 1)
+                    for (size_t i = 0; i < row; i++)
+                        dst[i] = (uint8_t)((up[i] + 6 * mid[i] + dn[i] + 4) >> 3);
+                else
+                    for (size_t i = 0; i < row; i++)
+                        dst[i] = (uint8_t)((up[i] + 2 * mid[i] + dn[i] + 2) >> 2);
+            }
             src = G.field;
         } else {
             src = G.frame;
+        }
+        if (atomic_load(&G.fx_bri) || atomic_load(&G.fx_con) != 100 || atomic_load(&G.fx_sat) != 100 ||
+            atomic_load(&G.fx_blk) || atomic_load(&G.fx_scn)) {
+            apply_fx(G.fx_buf, src, w, h);
+            src = G.fx_buf;
         }
         const uint16_t vsync = gmz_calc_vsync(G.conn, 2000000, enc_ns, send_ns);
         uint64_t t0 = now_ns();
@@ -174,10 +271,11 @@ static bool start_locked(const struct ml *ml)
     const int fh = ml->interlace ? ml->va / 2 : ml->va;
     G.frame = calloc(1, (size_t)ml->ha * ml->va * 3);
     G.field = calloc(1, (size_t)ml->ha * fh * 3);
+    G.fx_buf = calloc(1, (size_t)ml->ha * fh * 3);
     nlc_params np = nlc_p(ml->ha, fh, G.near_lvl);
     G.nlc_cap = nlc_max_encoded_size(&np);
     G.nlc_buf = malloc(G.nlc_cap);
-    if (!G.frame || !G.field || !G.nlc_buf) goto fail;
+    if (!G.frame || !G.field || !G.fx_buf || !G.nlc_buf) goto fail;
 
     pthread_mutex_lock(&G.gmz_lock);
     bool ok = open_conn();
@@ -193,8 +291,8 @@ static bool start_locked(const struct ml *ml)
     }
     return true;
 fail:
-    free(G.frame); free(G.field); free(G.nlc_buf);
-    G.frame = G.field = G.nlc_buf = NULL;
+    free(G.frame); free(G.field); free(G.fx_buf); free(G.nlc_buf);
+    G.frame = G.field = G.fx_buf = G.nlc_buf = NULL;
     return false;
 }
 
@@ -206,8 +304,8 @@ static void stop_locked(void)
     if (G.conn) gmz_disconnect(G.conn);
     G.conn = NULL;
     pthread_mutex_unlock(&G.gmz_lock);
-    free(G.frame); free(G.field); free(G.nlc_buf);
-    G.frame = G.field = G.nlc_buf = NULL;
+    free(G.frame); free(G.field); free(G.fx_buf); free(G.nlc_buf);
+    G.frame = G.field = G.fx_buf = G.nlc_buf = NULL;
 }
 
 bool mister_acquire(const char *host, const char *modeline, int near_lvl,
@@ -265,6 +363,12 @@ bool mister_switch(const char *modeline, struct mister_info *info)
 out:
     pthread_mutex_unlock(&G.lock);
     return ok;
+}
+
+void mister_set_interlace(int bff, int flicker)
+{
+    atomic_store(&G.bff, bff ? 1 : 0);
+    atomic_store(&G.flicker, flicker < 0 ? 0 : flicker > 2 ? 2 : flicker);
 }
 
 void mister_release(void)

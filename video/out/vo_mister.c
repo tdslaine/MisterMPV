@@ -23,11 +23,16 @@
 #include "video/sws_utils.h"
 #include "vo.h"
 #include "mister_conn.h"
+#include "mister_calib.h"
+#include "options/m_config.h"
+#include "video/csputils.h"
 
 struct priv {
     char *host;
     char *modeline;
     int near_lvl;
+    int field_order;          // 0 = TFF, 1 = BFF
+    int flicker;              // 0 off, 1 light, 2 full
 
     bool connected;
     bool auto_mode;           // pick the modeline from the source (fps / height)
@@ -41,16 +46,80 @@ struct priv {
     struct mp_image *img;     // RGB24, info.width x info.height
     struct mp_rect src, dst;
     struct mp_osd_res osd;
+    struct mp_csp_equalizer_state *eq;   // brightness/contrast/saturation
+    struct m_config_cache *fx;   // black level / scanlines / CRT geometry
+    struct mister_rect pic;      // picture rect in the full-frame raster (may exceed it)
+    struct mister_rect pic_field; // same in the calibration raster (one field if interlaced)
+    bool calibrate;
+    uint8_t *calib_buf;          // field-sized pattern (interlaced only)
 };
+
+static void update_geometry(struct vo *vo);
+
+static void update_fx(struct vo *vo)
+{
+    struct priv *p = vo->priv;
+    struct mp_csp_params cp = MP_CSP_PARAMS_DEFAULTS;
+    mp_csp_equalizer_state_get(p->eq, &cp);
+    m_config_cache_update(p->fx);
+    const struct mister_fx_opts *f = p->fx->opts;
+    mister_set_fx(cp.brightness * 100.0, (cp.contrast - 1.0) * 100.0,
+                  (cp.saturation - 1.0) * 100.0, f->blacklevel, f->scanlines);
+    update_geometry(vo);
+}
+
+// Picture rect in the full-frame raster; the calibration raster is one field when interlaced.
+static void update_geometry(struct vo *vo)
+{
+    struct priv *p = vo->priv;
+    const struct mister_fx_opts *f = p->fx->opts;
+    const int w = p->info.width, h = p->info.height;
+    const int k = p->info.interlaced ? 2 : 1;
+    struct mister_rect pf;
+    mister_picture_rect(f->hsize, f->vsize, f->hoffset, f->voffset, w, h / k, &pf);
+    struct mister_rect pic = {pf.x, pf.y * k, pf.w, pf.h * k};
+    const bool changed = memcmp(&pic, &p->pic, sizeof(pic)) || p->calibrate != f->calibrate;
+    p->pic = pic;
+    p->pic_field = pf;
+    p->calibrate = f->calibrate;
+    if (changed && p->src_params.w > 0 && p->img) {
+        mp_image_clear(p->img, 0, 0, p->img->w, p->img->h);
+        vo->want_redraw = true;
+        vo->dwidth = -1;   // force setup_scaling() on the next draw
+    }
+}
+
+// Clip dst to the raster and shrink src by the same proportion.
+static void clip_rects(struct mp_rect *dst, struct mp_rect *src, int W, int H)
+{
+    const int dl[2] = {dst->x0, dst->y0}, dh[2] = {dst->x1, dst->y1};
+    const int lim[2] = {W, H};
+    int sl[2] = {src->x0, src->y0}, sh[2] = {src->x1, src->y1};
+    int nl[2], nh[2];
+    for (int i = 0; i < 2; i++) {
+        nl[i] = dl[i] < 0 ? 0 : dl[i];
+        nh[i] = dh[i] > lim[i] ? lim[i] : dh[i];
+        if (nh[i] <= nl[i]) { nl[i] = nh[i] = 0; sl[i] = sh[i] = 0; continue; }
+        const double span = dh[i] - dl[i], sspan = sh[i] - sl[i];
+        const int s0 = sl[i] + (int)((nl[i] - dl[i]) * sspan / span);
+        const int s1 = sh[i] - (int)((dh[i] - nh[i]) * sspan / span);
+        sl[i] = s0; sh[i] = s1;
+    }
+    *dst = (struct mp_rect){nl[0], nl[1], nh[0], nh[1]};
+    *src = (struct mp_rect){sl[0], sl[1], sh[0], sh[1]};
+}
 
 static int setup_scaling(struct vo *vo)
 {
     struct priv *p = vo->priv;
     struct mp_image_params *params = &p->src_params;
 
-    vo->dwidth = p->info.width;
-    vo->dheight = p->info.height;
+    vo->dwidth = p->pic.w;
+    vo->dheight = p->pic.h;
     vo_get_src_dst_rects(vo, &p->src, &p->dst, &p->osd);
+    p->dst.x0 += p->pic.x; p->dst.x1 += p->pic.x;
+    p->dst.y0 += p->pic.y; p->dst.y1 += p->pic.y;
+    clip_rects(&p->dst, &p->src, p->info.width, p->info.height);
 
     p->sws->src = *params;
     p->sws->src.w = mp_rect_w(p->src);
@@ -116,11 +185,12 @@ static void auto_decide(struct vo *vo, struct vo_frame *frame)
         return;
     if (info.width != p->info.width || info.height != p->info.height) {
         talloc_free(p->img);
-        p->img = mp_image_alloc(IMGFMT_RGB24, info.width, info.height);
+        p->img = mp_image_alloc(IMGFMT_BGR24, info.width, info.height);
         mp_image_params_guess_csp(&p->img->params);
     }
     p->info = info;
     mp_image_clear(p->img, 0, 0, p->img->w, p->img->h);
+    update_geometry(vo);   // the raster changed with the modeline
     setup_scaling(vo);
 }
 
@@ -130,6 +200,25 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
     if (!p->decided)
         auto_decide(vo, frame);
     struct mp_image *img = p->img;
+
+    if (vo->dwidth != p->pic.w)
+        setup_scaling(vo);
+
+    if (p->calibrate) {
+        const int w = p->info.width, h = p->info.height;
+        if (!p->info.interlaced) {
+            mister_render_calibration(img->planes[0], w, h, &p->pic_field);
+        } else {   // draw one field, then repeat every line so both fields carry it
+            if (!p->calib_buf)
+                p->calib_buf = talloc_size(p, (size_t)w * (h / 2) * 3);
+            mister_render_calibration(p->calib_buf, w, h / 2, &p->pic_field);
+            for (int y = 0; y < h; y++)
+                memcpy(img->planes[0] + (size_t)y * img->stride[0],
+                       p->calib_buf + (size_t)(y / 2) * w * 3, (size_t)w * 3);
+        }
+        mister_set_frame(img->planes[0], img->stride[0]);
+        return VO_TRUE;
+    }
 
     if (frame->current) {
         mp_image_clear_rc_inv(img, p->dst);
@@ -147,7 +236,11 @@ static bool draw_frame(struct vo *vo, struct vo_frame *frame)
         mp_image_clear(img, 0, 0, img->w, img->h);
     }
 
-    osd_draw_on_image(vo->osd, p->osd, frame->current ? frame->current->pts : 0, 0, img);
+    struct mp_image osd_img = *img;
+    struct mp_rect pr = {MPMAX(p->pic.x, 0), MPMAX(p->pic.y, 0),
+                         MPMIN(p->pic.x + p->pic.w, img->w), MPMIN(p->pic.y + p->pic.h, img->h)};
+    mp_image_crop_rc(&osd_img, pr);   // subtitles live inside the calibrated picture
+    osd_draw_on_image(vo->osd, p->osd, frame->current ? frame->current->pts : 0, 0, &osd_img);
     mister_set_frame(img->planes[0], img->stride[0]);
     return VO_TRUE;
 }
@@ -159,7 +252,7 @@ static void flip_page(struct vo *vo)
 static int query_format(struct vo *vo, int format)
 {
     struct priv *p = vo->priv;
-    return mp_sws_supports_formats(p->sws, IMGFMT_RGB24, format);
+    return mp_sws_supports_formats(p->sws, IMGFMT_BGR24, format);
 }
 
 static void uninit(struct vo *vo)
@@ -178,13 +271,17 @@ static int preinit(struct vo *vo)
     mp_sws_enable_cmdline_opts(p->sws, vo->global);
 
     p->auto_mode = !p->modeline || !*p->modeline || !strcmp(p->modeline, "auto");
+    mister_set_interlace(p->field_order, p->flicker);
     if (!mister_acquire(p->host, p->modeline, p->near_lvl, &p->info)) {
         MP_ERR(vo, "Could not connect to the MiSTer.\n");
         return -1;
     }
     p->connected = true;
+    p->eq = mp_csp_equalizer_create(p, vo->global);
+    p->fx = m_config_cache_alloc(p, vo->global, &mister_fx_conf);
+    update_fx(vo);
 
-    p->img = mp_image_alloc(IMGFMT_RGB24, p->info.width, p->info.height);
+    p->img = mp_image_alloc(IMGFMT_BGR24, p->info.width, p->info.height);
     if (!p->img)
         return -1;
     mp_image_clear(p->img, 0, 0, p->img->w, p->img->h);
@@ -200,6 +297,9 @@ static int control(struct vo *vo, uint32_t request, void *data)
     switch (request) {
     case VOCTRL_GET_DISPLAY_FPS:
         *(double *)data = p->info.refresh;
+        return VO_TRUE;
+    case VOCTRL_UPDATE_RENDER_OPTS:
+        update_fx(vo);
         return VO_TRUE;
     case VOCTRL_RESET:
     case VOCTRL_PAUSE:
@@ -221,11 +321,13 @@ const struct vo_driver video_out_mister = {
     .flip_page = flip_page,
     .uninit = uninit,
     .priv_size = sizeof(struct priv),
-    .priv_defaults = &(const struct priv) { .near_lvl = 1 },
+    .priv_defaults = &(const struct priv) { .near_lvl = 1, .flicker = 1 },
     .options = (const struct m_option[]) {
         {"host", OPT_STRING(host)},
         {"modeline", OPT_STRING(modeline)},
         {"near", OPT_INT(near_lvl), M_RANGE(0, 3)},
+        {"field-order", OPT_CHOICE(field_order, {"tff", 0}, {"bff", 1})},
+        {"flicker", OPT_CHOICE(flicker, {"off", 0}, {"light", 1}, {"full", 2})},
         {0}
     },
     .options_prefix = "vo-mister",

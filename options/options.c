@@ -42,6 +42,7 @@
 #include "input/event.h"
 #include "stream/stream.h"
 #include "video/csputils.h"
+#include "video/out/mister_conn.h"
 #include "video/filter/refqueue.h"
 #include "video/hwdec.h"
 #include "video/image_writer.h"
@@ -789,6 +790,7 @@ static const m_option_t mp_opts[] = {
         .flags = UPDATE_SCREENSAVER},
 
     {"", OPT_SUBSTRUCT(video_equalizer, mp_csp_equalizer_conf)},
+    {"", OPT_SUBSTRUCT(mister_fx, mister_fx_conf)},
 
     {"use-filedir-conf", OPT_BOOL(use_filedir_conf)},
     {"osd-level", OPT_CHOICE(osd_level,

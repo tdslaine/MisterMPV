@@ -15,6 +15,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QUdpSocket>
+#include <QHostAddress>
+#include <QEventLoop>
+#include <QElapsedTimer>
+#include <QStandardPaths>
+#include <QProcessEnvironment>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QDialog>
@@ -99,6 +105,11 @@ public:
         m_subScale->setSuffix(" %");
         m_subScale->setValue(m_set.value("subScale", 100).toInt());
         m_subScale->setToolTip("Text subtitle size (bitmap subs like PGS/DVD are not scalable).");
+        m_subPos = new QSpinBox;
+        m_subPos->setRange(0, 100);
+        m_subPos->setSuffix(" %");
+        m_subPos->setValue(m_set.value("subPos", 100).toInt());
+        m_subPos->setToolTip("Vertical subtitle position: 100 = bottom, lower values move them up.");
         auto mkSpin = [this](const char* key, int lo, int hi, int def, const char* suffix) {
             auto* s = new QSpinBox;
             s->setRange(lo, hi);
@@ -141,6 +152,19 @@ public:
         addPair(0, "MiSTer:", m_host, "Codec:", m_near);
         addPair(1, "Modeline:", m_modeline, "Format:", m_aspect);
         addPair(2, "Field order:", m_field, "Flicker filter:", m_flicker);
+        auto* testBtn = new QPushButton("Test connection");
+        auto* coreBtn = new QPushButton("Launch Groovy core");
+        auto* sshBtn = new QPushButton("SSH login…");
+        testBtn->setToolTip("Sends a status request to the MiSTer (UDP 32100) and waits for the reply");
+        coreBtn->setToolTip("Over SSH: load the newest /media/fat/_Utility/Groovy_*.rbf on the MiSTer");
+        auto* misterRow = new QHBoxLayout;
+        misterRow->addWidget(testBtn);
+        misterRow->addWidget(coreBtn);
+        misterRow->addWidget(sshBtn);
+        og->addLayout(misterRow, 3, 0, 1, 4);
+        connect(testBtn, &QPushButton::clicked, this, [this] { testConnection(); });
+        connect(coreBtn, &QPushButton::clicked, this, [this] { launchCore(); });
+        connect(sshBtn, &QPushButton::clicked, this, [this] { sshDialog(); });
         og->setColumnStretch(1, 1);
         og->setColumnStretch(3, 1);
 
@@ -150,6 +174,7 @@ public:
         tf->addRow("Audio:", m_audio);
         tf->addRow("Subtitles:", m_sub);
         tf->addRow("Subtitle size:", sliderRow(m_subScale));
+        tf->addRow("Subtitle position:", sliderRow(m_subPos));
 
         // ---- Picture group: colour sliders + CRT calibration dialog ---------------------------
         auto* picBox = new QGroupBox("Picture");
@@ -284,11 +309,16 @@ public:
         for (auto* s : {m_bri, m_con, m_sat, m_blk, m_scn})
             connect(s, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_subScale, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
+        connect(m_subPos, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
             cmd({"set_property", "loop-file", on ? "inf" : "no"});
         });
         connect(&m_proc, &QProcess::finished, this, [this] { onStopped(); });
+        connect(&m_ssh, &QProcess::finished, this, [this](int code) { onSshFinished(code); });
+        connect(&m_ssh, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
+            if (e == QProcess::FailedToStart) { m_status->setText("ssh not found - install openssh"); }
+        });
         connect(&m_sock, &QLocalSocket::readyRead, this, &Window::onData);
         m_retry.setInterval(150);
         connect(&m_retry, &QTimer::timeout, this, [this] {
@@ -369,6 +399,90 @@ private:
         return w;
     }
 
+    // UDP reachability: the Groovy core answers CMD_GET_STATUS (1 byte, 0x05) from the FPGA.
+    // A different source port counts as a new sender for the core, so don't do this mid-playback.
+    void testConnection() {
+        if (m_proc.state() != QProcess::NotRunning) {
+            m_status->setText("Stop playback first - the MiSTer takes one sender at a time");
+            return;
+        }
+        QUdpSocket sock;
+        const QHostAddress addr(m_host->text().trimmed());
+        if (addr.isNull()) { m_status->setText("Test: invalid MiSTer IP"); return; }
+        QEventLoop loop;
+        QTimer t;
+        t.setSingleShot(true);
+        connect(&t, &QTimer::timeout, &loop, &QEventLoop::quit);
+        connect(&sock, &QUdpSocket::readyRead, &loop, &QEventLoop::quit);
+        QElapsedTimer el;
+        el.start();
+        sock.writeDatagram(QByteArray(1, 5), addr, 32100);
+        t.start(1000);
+        loop.exec();
+        if (sock.hasPendingDatagrams()) {
+            sock.readDatagram(nullptr, 0);
+            m_status->setText(QString("MiSTer answered in %1 ms - Groovy core is running").arg(el.elapsed()));
+        } else {
+            m_status->setText("No reply from the MiSTer - core not loaded (try \"Launch Groovy core\") or wrong IP?");
+        }
+    }
+
+    // SSH password via SSH_ASKPASS (no sshpass needed); the password only lives in the child's env.
+    void launchCore() {
+        if (m_ssh.state() != QProcess::NotRunning) return;
+        const QString host = m_host->text().trimmed();
+        if (host.isEmpty()) { m_status->setText("Enter the MiSTer IP first"); return; }
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+        const QString askpass = dir + QString("/misterMPV-askpass-%1.sh").arg(QCoreApplication::applicationPid());
+        QFile f(askpass);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { m_status->setText("Cannot write askpass helper"); return; }
+        f.write("#!/bin/sh\nprintf '%s\\n' \"$MISTER_SSH_PW\"\n");
+        f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+        f.close();
+        m_askpass = askpass;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("SSH_ASKPASS", askpass);
+        env.insert("SSH_ASKPASS_REQUIRE", "force");
+        env.insert("MISTER_SSH_PW", m_set.value("sshPass", "1").toString());
+        m_ssh.setProcessEnvironment(env);
+        m_ssh.setStandardInputFile(QProcess::nullDevice());
+        const QString user = m_set.value("sshUser", "root").toString();
+        const QString remote =
+            "f=$(ls -t /media/fat/_Utility/Groovy_*.rbf 2>/dev/null | head -1); [ -n \"$f\" ] || exit 3; "
+            "echo \"load_core $f\" > /dev/MiSTer_cmd";
+        m_ssh.start("ssh", {"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                            "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", user + "@" + host, remote});
+        m_status->setText("Loading Groovy core on the MiSTer…");
+    }
+    void onSshFinished(int code) {
+        if (!m_askpass.isEmpty()) { QFile::remove(m_askpass); m_askpass.clear(); }
+        if (code == 0)
+            m_status->setText("Groovy core loading - give it a few seconds, then \"Test connection\"");
+        else if (code == 3)
+            m_status->setText("No Groovy_*.rbf found in /media/fat/_Utility on the MiSTer");
+        else
+            m_status->setText("SSH failed (" + QString::number(code) + "): " +
+                              QString::fromUtf8(m_ssh.readAllStandardError()).trimmed().left(160));
+    }
+    void sshDialog() {
+        QDialog d(this);
+        d.setWindowTitle("MiSTer SSH login");
+        auto* f = new QFormLayout(&d);
+        auto* u = new QLineEdit(m_set.value("sshUser", "root").toString());
+        auto* pw = new QLineEdit(m_set.value("sshPass", "1").toString());
+        pw->setEchoMode(QLineEdit::Password);
+        pw->setToolTip("Stored unencrypted in the settings file (MiSTer default: root / 1).");
+        f->addRow("User:", u);
+        f->addRow("Password:", pw);
+        auto* ok = new QPushButton("Save");
+        f->addRow(ok);
+        connect(ok, &QPushButton::clicked, &d, &QDialog::accept);
+        if (d.exec() == QDialog::Accepted) {
+            m_set.setValue("sshUser", u->text().trimmed());
+            m_set.setValue("sshPass", pw->text());
+        }
+    }
+
     bool running() const { return m_sock.state() == QLocalSocket::ConnectedState; }
 
     static QString entryLabel(const QString& f) {
@@ -440,7 +554,8 @@ private:
                          "--ao-mister-near=" + QString::number(m_near->currentIndex()),
                          "--input-ipc-server=" + m_sockPath, "--no-terminal", "--idle=no",
                          "--sub-auto=fuzzy",
-                         "--sub-scale=" + QString::number(m_subScale->value() / 100.0)};
+                         "--sub-scale=" + QString::number(m_subScale->value() / 100.0),
+                         "--sub-pos=" + QString::number(m_subPos->value())};
         if (m_loop->isChecked()) a << "--loop-file=inf";
         if (m_loopPl->isChecked()) a << "--loop-playlist=inf";
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
@@ -483,6 +598,8 @@ private:
     // Live picture settings (sub size + aspect/format), also re-sent on every (re)connect.
     void applyView() {
         m_set.setValue("subScale", m_subScale->value());
+        m_set.setValue("subPos", m_subPos->value());
+        cmd({"set_property", "sub-pos", m_subPos->value()});
         m_set.setValue("aspect", m_aspect->currentIndex());
         cmd({"set_property", "sub-scale", m_subScale->value() / 100.0});
         const struct { const char* key; QSpinBox* w; } fx[] = {
@@ -576,7 +693,7 @@ private:
     QDoubleSpinBox *m_hsize, *m_vsize;
     QSpinBox *m_hoff, *m_voff;
     QCheckBox* m_calib;
-    QSpinBox *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
+    QSpinBox *m_subPos, *m_subScale, *m_bri, *m_con, *m_sat, *m_blk, *m_scn;
     QCheckBox *m_loop, *m_loopPl;
     QListWidget* m_list;
     QDialog* m_calDlg;
@@ -585,6 +702,8 @@ private:
     QLabel *m_time, *m_status;
     QPushButton *m_play, *m_pause;
     QProcess m_proc;
+    QProcess m_ssh;
+    QString m_askpass;
     QLocalSocket m_sock;
     QTimer m_retry;
     QString m_sockPath;

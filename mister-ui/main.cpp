@@ -329,7 +329,14 @@ public:
         sf.setPointSizeF(sf.pointSizeF() + 1);
         m_status->setFont(sf);
         m_status->setText("stopped");
-        root->addWidget(m_status);
+        m_led = new QLabel;
+        m_led->setFixedSize(16, 16);
+        setLed(Led::Stopped);
+        auto* statusRow = new QHBoxLayout;
+        statusRow->addWidget(m_led, 0, Qt::AlignVCenter);
+        statusRow->addSpacing(4);
+        statusRow->addWidget(m_status, 1);
+        root->addLayout(statusRow);
         root->addSpacing(8);   // air between the title line and the seek bar
         root->addLayout(seekRow);
         root->addLayout(btns);
@@ -533,6 +540,21 @@ private:
             }
         }
         return loc;   // no kio-fuse mount found: let mpv try (will fail for smb)
+    }
+
+    // Status LED: green = playing, blue = paused, red = stopped
+    enum class Led { Stopped, Playing, Paused };
+    void setLed(Led l) {
+        const char *hi, *mid, *lo, *tip;
+        switch (l) {
+        case Led::Playing: hi = "#c4ffc4"; mid = "#22c522"; lo = "#0b6b0b"; tip = "playing"; break;
+        case Led::Paused:  hi = "#c4dcff"; mid = "#2a7bff"; lo = "#0b3a8a"; tip = "paused"; break;
+        default:           hi = "#ffc4c4"; mid = "#e02020"; lo = "#7a0a0a"; tip = "stopped"; break;
+        }
+        m_led->setToolTip(tip);
+        m_led->setStyleSheet(QString("background: qradialgradient(cx:0.4, cy:0.35, radius:0.75, fx:0.35, fy:0.3,"
+                                     " stop:0 %1, stop:0.45 %2, stop:1 %3);"
+                                     " border: 1px solid %3; border-radius: 8px;").arg(hi, mid, lo));
     }
 
     // Slider + number box in one row; the spin box stays the single source of truth.
@@ -920,6 +942,7 @@ private:
         m_retry.stop();
         m_sock.abort();
         m_play->setText("▶  Play");
+        setLed(Led::Stopped);
         setControlsEnabled(false);
         m_status->setText(m_proc.exitCode() == 0 ? "stopped" : "mpv exited (code " + QString::number(m_proc.exitCode()) + ")");
         m_audio->clear();
@@ -1021,6 +1044,7 @@ private:
                 }
             } else if (n == "pause") {
                 m_play->setText(v.toBool() ? "▶  Play" : "❚❚  Pause");
+                setLed(v.toBool() ? Led::Paused : Led::Playing);
             } else if (n == "volume" && v.isDouble()) {   // gamepad / other changes follow the slider
                 m_remoteVS = true;
                 m_vol->setValue(qRound(v.toDouble()));
@@ -1094,7 +1118,7 @@ private:
     QDialog* m_calDlg;
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
-    QLabel *m_time, *m_status;
+    QLabel *m_time, *m_status, *m_led;
     QPushButton *m_play, *m_stop;
     QProcess m_proc;
     QProcess m_ssh;

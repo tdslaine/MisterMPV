@@ -38,7 +38,7 @@ public:
         root->addLayout(fileRow);
 
         auto* form = new QFormLayout;
-        m_host = new QLineEdit(m_set.value("host").toString());
+        m_host = new QLineEdit(qEnvironmentVariable("MISTER_HOST", m_set.value("host").toString()));
         m_modeline = new QComboBox;
         m_modeline->addItem("auto (match source)");
         for (const char* k : kModelineKeys) m_modeline->addItem(k);

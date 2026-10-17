@@ -41,6 +41,9 @@
 #include <QDialog>
 #include <QUrl>
 #include <QDirIterator>
+#include <QDBusInterface>
+#include <QDBusReply>
+#include <QHash>
 #include <QListWidget>
 #include <QTreeWidget>
 #include <QSet>
@@ -744,7 +747,46 @@ private:
                 }
             }
         }
-        return loc;   // no kio-fuse mount found: let mpv try (will fail for smb)
+        // No mount yet (e.g. after a reboot): ask kio-fuse to mount it; it answers with the local path.
+        QDBusInterface vfs("org.kde.KIOFuse", "/org/kde/KIOFuse", "org.kde.KIOFuse.VFS");
+        vfs.setTimeout(15000);
+        const QDBusReply<QString> r = vfs.call("mountUrl", loc);
+        if (r.isValid() && QFileInfo::exists(r.value())) return r.value();
+        return loc;   // kio-fuse not available: let mpv try (will fail for smb)
+    }
+
+    // Before handing the list to mpv: network URLs -> kio-fuse paths, and paths into a kio-fuse
+    // dir that no longer exists (its name changes with every kio-fuse start) back to their URL first.
+    // One resolve per host; the other entries reuse its prefix so a big list is not stat'ed over SMB.
+    static QStringList playableLocations(const QStringList& in) {
+        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR", "/run/user/1000");
+        QHash<QString, QString> prefix;   // "smb://user@host" -> "<kio-fuse dir>/smb/user@host"
+        QHash<QString, int> tries;
+        QHash<QString, bool> fuseDirOk;
+        QStringList out;
+        for (QString f : in) {
+            if (f.startsWith(runtime + "/kio-fuse-")) {
+                const QString dir = f.section('/', 0, runtime.count('/') + 1);
+                if (!fuseDirOk.contains(dir)) fuseDirOk[dir] = QFileInfo::exists(dir);
+                if (!fuseDirOk[dir]) {   // <dir>/<scheme>/<user@host>/<path>
+                    const QString rest = f.mid(dir.size() + 1);
+                    QUrl u;
+                    u.setScheme(rest.section('/', 0, 0));
+                    u.setAuthority(rest.section('/', 1, 1));
+                    u.setPath("/" + rest.section('/', 2));
+                    f = u.toString();
+                }
+            }
+            const QUrl u(f);
+            if (u.scheme().isEmpty() || u.isLocalFile() || !f.contains("://")) { out << f; continue; }
+            const QString key = u.scheme() + "://" + u.authority();
+            if (prefix.value(key).isEmpty() && tries[key]++ < 3) {   // a missing file fails; try the next one
+                const QString r = resolveLocation(f);
+                if (r != f && r.endsWith(u.path())) prefix[key] = r.chopped(u.path().size());
+            }
+            out << (prefix.value(key).isEmpty() ? f : prefix[key] + u.path());
+        }
+        return out;
     }
 
     // Status LED: green = playing, blue = paused, red = stopped
@@ -1408,7 +1450,9 @@ private:
              ",mister-track-pos=" + QString(m_trackPos->currentIndex() ? "top" : "bottom");
         if (startRow < 0) startRow = m_list->currentRow() >= 0 ? m_list->currentRow() : 0;
         a << "--playlist-start=" + QString::number(startRow);
-        for (int i = 0; i < m_list->count(); i++) a << m_list->item(i)->data(0, Qt::UserRole).toString();
+        QStringList files;
+        for (int i = 0; i < m_list->count(); i++) files << m_list->item(i)->data(0, Qt::UserRole).toString();
+        a << playableLocations(files);
         m_proc.start(mpvPath(), a);
         m_status->setText("starting…");
         setLed(Led::Starting);

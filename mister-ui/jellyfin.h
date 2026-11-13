@@ -42,10 +42,12 @@ public:
             m_restart.setInterval(5000);   // healthy again: next crash restarts quickly
             int id = 1;
             for (const char* p : {"idle-active", "media-title", "pause"}) cmd({"observe_property", id++, p});
-            status("ready - cast to \"" + m_name + "\" from Jellyfin");
+            m_ipcUp = true;
+            if (!m_loggingIn) readyStatus();   // during sign-in the Quick Connect code stays on screen
             if (onConnected) onConnected();
         });
         QObject::connect(&m_sock, &QLocalSocket::disconnected, [this] {
+            m_ipcUp = false;
             setActive(false);
             if (m_proc.state() == QProcess::Running) m_retry.start();   // shim restarts its mpv
         });
@@ -57,6 +59,7 @@ public:
         });
         QObject::connect(&m_proc, &QProcess::finished, [this](int code) {
             m_retry.stop();
+            m_ipcUp = false;
             m_sock.abort();
             setActive(false);
             if (m_stopping) { m_stopping = false; status("off"); return; }
@@ -76,6 +79,10 @@ public:
 
     static QString confDir() {
         return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/mistercast/jellyfin";
+    }
+    // Shim output of the current run (rewritten on every start), for when something does not work.
+    static QString logPath() {
+        return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/mistercast/jellyfin-shim.log";
     }
     static QString sockPath() {
         QString rt = qEnvironmentVariable("XDG_RUNTIME_DIR");
@@ -182,6 +189,11 @@ public:
 
 private:
     void status(const QString& s) { m_status = s; if (onStatus) onStatus(s); }
+    // Only signed in is it a device in Jellyfin; a running mpv alone says nothing about that.
+    void readyStatus() {
+        if (signedIn()) status("ready - cast to \"" + m_name + "\" from Jellyfin");
+        else status("not signed in - Setup… → Sign in");
+    }
 
     void launch(const QStringList& extra) {
         if (m_mpvPath.isEmpty() || !QFileInfo::exists(m_mpvPath)) { status("mpv binary not found: " + m_mpvPath); return; }
@@ -192,6 +204,11 @@ private:
         m_proc.setProcessEnvironment(env);
         m_proc.setStandardInputFile(QProcess::nullDevice());
         m_log.clear();
+        QDir().mkpath(QFileInfo(logPath()).absolutePath());
+        m_logFile.close();
+        m_logFile.setFileName(logPath());
+        if (m_logFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            m_logFile.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
         m_proc.start("jellyfin-mpv-shim", QStringList{"--config", confDir(), "--no-gui"} + extra);
         if (!m_loggingIn) status("starting…");
         m_retry.start();
@@ -244,7 +261,9 @@ private:
     }
 
     void onLog() {
-        m_log += m_proc.readAll();
+        const QByteArray chunk = m_proc.readAll();
+        if (m_logFile.isOpen()) { m_logFile.write(chunk); m_logFile.flush(); }
+        m_log += chunk;
         int nl;
         static const QRegularExpression codeRe("^\\s{4}(\\S{4,12})\\s*$");
         while ((nl = m_log.indexOf('\n')) >= 0) {
@@ -254,7 +273,7 @@ private:
             if (m_loggingIn) {
                 const auto m = codeRe.match(line);
                 if (m.hasMatch()) { status("Quick Connect code: " + m.captured(1)); if (onLoginCode) onLoginCode(m.captured(1)); }
-                else if (line.contains("Successfully added server")) { m_loggingIn = false; status("signed in"); }
+                else if (line.contains("Successfully added server")) { m_loggingIn = false; readyStatus(); }
                 else if (line.contains("Quick Connect") && line.contains("WARNING")) status(line.section("] ", 1).left(160));
             }
         }
@@ -289,5 +308,7 @@ private:
     QString m_mpvPath, m_name = "MiSTer", m_title, m_status;
     QStringList m_options;
     QJsonObject m_shimSettings;
+    QFile m_logFile;
+    bool m_ipcUp = false;
     bool m_enabled = false, m_active = false, m_paused = false, m_stopping = false, m_loggingIn = false;
 };

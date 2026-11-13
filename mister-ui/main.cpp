@@ -631,7 +631,7 @@ public:
         };
         m_jf.onLoginCode = [this](const QString& code) {
             m_jfStatus->setText("<b style='font-size:15pt'>" + code.toHtmlEscaped() + "</b><br>"
-                                "Enter this code in Jellyfin: user menu → Quick Connect");
+                                "Enter this code in Jellyfin within 5 minutes: user menu → Quick Connect");
         };
         m_jf.onState = [this](bool a, const QString& t, bool p) { jfState(a, t, p); };
         m_jf.onConnected = [this] { applyView(); };

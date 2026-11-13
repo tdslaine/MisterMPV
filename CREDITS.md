@@ -45,8 +45,7 @@ which license**. If something here is wrong or missing, please open an issue.
 
 `vo_mister`, `ao_mister`, the shared sender thread with field splitting / flicker filter / picture effects,
 CRT calibration and test pattern, the gamepad bridge, the Lua scripts (shuffle, visualizers, artist/title overlay),
-the whole `mister-ui` window, and the build integration. Developed with the help of
-[Claude Code](https://claude.com/claude-code) (Anthropic).
+the whole `mister-ui` window, and the build integration.
 
 ## Sibling project
 

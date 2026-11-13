@@ -1,7 +1,6 @@
 # misterMPV reference
 
 Technical reference for the MiSTer parts of this mpv fork. Overview and quick start: [README.md](README.md).
-Status, decisions and open points: [HANDOFF.md](HANDOFF.md).
 
 ## Output options
 

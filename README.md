@@ -311,7 +311,6 @@ the few hook lines listed under "Repository layout".
 ## Documentation, credits, license
 
 - [MISTER.md](MISTER.md): all options, scripts, gamepad details, window internals.
-- [HANDOFF.md](HANDOFF.md): status, decisions, pitfalls and open points. Read it before changing things.
 - [CREDITS.md](CREDITS.md): who made what this builds on, with links and licenses.
 - [README-mpv.md](README-mpv.md): mpv's own README.
 
@@ -326,4 +325,4 @@ misterMPV is free software under the GPL. mpv is GPLv2 or later (libmpv LGPLv2.1
 Built on mpv, psakhis' Groovy_MiSTer, verbst's GroovyNLC core and NLC codec, iequalshane's MiSTerCast, dylan's
 groovy-mister-zig, idio-sync's MiSTer_GroovyRelay (flicker filter and calibration ideas) and jedisct1's zig-lz4, with
 FFmpeg, libass, LuaJIT, Qt, Zig and yt-dlp. Full list: [CREDITS.md](CREDITS.md). "Winamp" is a trademark of its owner;
-this project is only inspired by its layout. Developed with the help of Claude Code (Anthropic).
+this project is only inspired by its layout.

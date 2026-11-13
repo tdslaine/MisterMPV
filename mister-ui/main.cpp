@@ -472,11 +472,11 @@ public:
         connect(m_vol, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
             if (m_remoteVS) return;
             m_set.setValue("volume", v);
-            cmd({"set_property", "volume", v});
+            ctl({"set_property", "volume", v});
         });
         connect(m_speed, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double v) {
             if (m_remoteVS) return;
-            cmd({"set_property", "speed", v});
+            ctl({"set_property", "speed", v});
         });
         root->addSpacing(14);        // air between the transport buttons and the playlist
         root->addWidget(plBox, 1);
@@ -510,8 +510,8 @@ public:
             if (running()) cmd({"playlist-clear"}); else { m_list->clear(); renumber(); }
             savePlaylist();
         });
-        connect(plPrev, &QPushButton::clicked, this, [this] { cmd({"script-message", "mister-prev"}); });
-        connect(plNext, &QPushButton::clicked, this, [this] { cmd({"script-message", "mister-next"}); });
+        connect(plPrev, &QPushButton::clicked, this, [this] { prevAny(); });
+        connect(plNext, &QPushButton::clicked, this, [this] { nextAny(); });
         // Drag & drop reorder: while mpv runs it owns the order, so mirror each move there
         // (it then reports the new list back); otherwise just persist the local order.
         connect(m_list->model(), &QAbstractItemModel::rowsMoved, this,
@@ -556,24 +556,19 @@ public:
             m_set.setValue("shuffle", on);
             cmd({"script-message", "mister-shuffle", on ? "yes" : "no"});
         });
-        connect(m_play, &QPushButton::clicked, this, [this] {
-            if (m_proc.state() == QProcess::NotRunning) start();
-            else cmd({"cycle", "pause"});   // Play <-> Pause; the label follows mpv's pause property
-        });
-        connect(m_stop, &QPushButton::clicked, this, [this] {
-            if (m_proc.state() != QProcess::NotRunning) stop();
-        });
-        connect(back, &QPushButton::clicked, this, [this] { cmd({"seek", -10, "relative"}); });
-        connect(fwd, &QPushButton::clicked, this, [this] { cmd({"seek", 10, "relative"}); });
+        connect(m_play, &QPushButton::clicked, this, [this] { togglePauseAny(); });   // label follows mpv's pause
+        connect(m_stop, &QPushButton::clicked, this, [this] { stopAny(); });
+        connect(back, &QPushButton::clicked, this, [this] { ctl({"seek", -10, "relative"}); });
+        connect(fwd, &QPushButton::clicked, this, [this] { ctl({"seek", 10, "relative"}); });
         connect(m_seek, &QSlider::sliderReleased, this, [this] {
             if (m_duration > 0)
-                cmd({"seek", m_seek->value() / 1000.0 * m_duration, "absolute"});
+                ctl({"seek", m_seek->value() / 1000.0 * m_duration, "absolute"});
         });
         connect(m_audio, &QComboBox::activated, this, [this](int i) {
-            cmd(QJsonArray{"set_property", "aid", QJsonValue::fromVariant(m_audio->itemData(i))});
+            ctl(QJsonArray{"set_property", "aid", QJsonValue::fromVariant(m_audio->itemData(i))});
         });
         connect(m_sub, &QComboBox::activated, this, [this](int i) {
-            cmd(QJsonArray{"set_property", "sid", QJsonValue::fromVariant(m_sub->itemData(i))});
+            ctl(QJsonArray{"set_property", "sid", QJsonValue::fromVariant(m_sub->itemData(i))});
         });
         for (auto* s : {m_hoff, m_voff})
             connect(s, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { applyView(); });
@@ -591,14 +586,18 @@ public:
         auto applyTrack = [this] {
             m_set.setValue("trackInfo", m_trackInfo->isChecked());
             m_set.setValue("trackPos", m_trackPos->currentIndex());
-            cmd({"script-message", "mister-track", m_trackInfo->isChecked() ? "yes" : "no",
-                 m_trackPos->currentIndex() ? "top" : "bottom"});
+            const QJsonArray msg{"script-message", "mister-track", m_trackInfo->isChecked() ? "yes" : "no",
+                                 m_trackPos->currentIndex() ? "top" : "bottom"};
+            cmd(msg);
+            m_jf.cmd(msg);
         };
         connect(m_trackInfo, &QCheckBox::toggled, this, applyTrack);
         connect(m_trackPos, qOverload<int>(&QComboBox::currentIndexChanged), this, applyTrack);
         connect(m_vis, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
             m_set.setValue("visualizer", m_vis->currentData().toString());
-            cmd({"script-message", "mister-vis", m_vis->currentData().toString()});
+            const QJsonArray msg{"script-message", "mister-vis", m_vis->currentData().toString()};
+            cmd(msg);
+            m_jf.cmd(msg);
         });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(&m_proc, &QProcess::finished, this, [this] { onStopped(); });
@@ -635,6 +634,7 @@ public:
         };
         m_jf.onState = [this](bool a, const QString& t, bool p) { jfState(a, t, p); };
         m_jf.onConnected = [this] { applyView(); };
+        m_jf.onProperty = [this](const QString& n, const QJsonValue& v) { if (casting()) onProp(n, v); };
         connect(m_host, &QLineEdit::editingFinished, this, [this] { m_set.setValue("host", m_host->text()); jfSync(); });
         for (auto* c : {m_modeline, m_near, m_field, m_flicker})
             connect(c, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { jfSync(); });
@@ -710,20 +710,17 @@ private:
             auto* sc = new QShortcut(k, this);
             connect(sc, &QShortcut::activated, this, [typing, fn] { if (!typing()) fn(); });
         };
-        auto togglePause = [this] {
-            if (m_proc.state() == QProcess::NotRunning) start(); else cmd({"cycle", "pause"});
-        };
-        bind(Qt::Key_Space, togglePause);
-        bind(Qt::Key_C, togglePause);
+        bind(Qt::Key_Space, [this] { togglePauseAny(); });
+        bind(Qt::Key_C, [this] { togglePauseAny(); });
         bind(Qt::Key_X, [this] { if (m_proc.state() == QProcess::NotRunning) start(); else cmd({"seek", 0, "absolute"}); });
-        bind(Qt::Key_V, [this] { if (m_proc.state() != QProcess::NotRunning) stop(); });
-        bind(Qt::Key_Z, [this] { cmd({"script-message", "mister-prev"}); });
-        bind(Qt::Key_B, [this] { cmd({"script-message", "mister-next"}); });
-        bind(Qt::Key_M, [this] { cmd({"cycle", "mute"}); });
-        bind(Qt::CTRL | Qt::Key_Left,  [this] { cmd({"seek", -10, "relative"}); });
-        bind(Qt::CTRL | Qt::Key_Right, [this] { cmd({"seek", 10, "relative"}); });
-        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Left,  [this] { cmd({"seek", -60, "relative"}); });
-        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Right, [this] { cmd({"seek", 60, "relative"}); });
+        bind(Qt::Key_V, [this] { stopAny(); });
+        bind(Qt::Key_Z, [this] { prevAny(); });
+        bind(Qt::Key_B, [this] { nextAny(); });
+        bind(Qt::Key_M, [this] { ctl({"cycle", "mute"}); });
+        bind(Qt::CTRL | Qt::Key_Left,  [this] { ctl({"seek", -10, "relative"}); });
+        bind(Qt::CTRL | Qt::Key_Right, [this] { ctl({"seek", 10, "relative"}); });
+        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Left,  [this] { ctl({"seek", -60, "relative"}); });
+        bind(Qt::CTRL | Qt::SHIFT | Qt::Key_Right, [this] { ctl({"seek", 60, "relative"}); });
         bind(Qt::CTRL | Qt::Key_Up,   [this] { m_vol->setValue(m_vol->value() + 5); });
         bind(Qt::CTRL | Qt::Key_Down, [this] { m_vol->setValue(m_vol->value() - 5); });
         auto* del = new QShortcut(Qt::Key_Delete, m_list);
@@ -1562,12 +1559,44 @@ private:
         }
         if (m_proc.state() != QProcess::NotRunning) return;
         if (active) {
+            if (!m_castShown) {   // the window's transport now drives the cast
+                m_castShown = true;
+                setControlsEnabled(true);
+                m_jf.replay();
+            }
             setLed(paused ? Led::Paused : Led::Playing);
             m_status->setText("Jellyfin ▶ " + (title.isEmpty() ? QString("…") : title));
         } else {
-            setLed(Led::Stopped);
+            m_castShown = false;
+            resetTransport();
             m_status->setText("stopped");
         }
+    }
+
+    // Transport target: our own mpv while it runs, otherwise a running Jellyfin cast.
+    bool casting() const { return m_proc.state() == QProcess::NotRunning && m_jf.active(); }
+    void ctl(const QJsonArray& a) { if (casting()) m_jf.cmd(a); else cmd(a); }
+    void togglePauseAny() {
+        if (casting()) m_jf.key("space");
+        else if (m_proc.state() == QProcess::NotRunning) start();
+        else cmd({"cycle", "pause"});
+    }
+    void stopAny() {
+        if (casting()) m_jf.key("q");
+        else if (m_proc.state() != QProcess::NotRunning) stop();
+    }
+    void prevAny() { if (casting()) m_jf.key("<"); else cmd({"script-message", "mister-prev"}); }
+    void nextAny() { if (casting()) m_jf.key(">"); else cmd({"script-message", "mister-next"}); }
+    void resetTransport() {
+        m_play->setText("▶  Play");
+        setLed(Led::Stopped);
+        setControlsEnabled(false);
+        m_audio->clear();
+        m_sub->clear();
+        m_duration = 0;
+        m_time->setText("0:00 / 0:00");
+        const QSignalBlocker b(m_seek);
+        m_seek->setValue(0);
     }
 
     void stop() {
@@ -1580,17 +1609,14 @@ private:
     void onStopped() {
         m_retry.stop();
         m_sock.abort();
-        m_play->setText("▶  Play");
-        setLed(Led::Stopped);
+        resetTransport();
+        m_castShown = false;
         m_curRow = -1;
         if (m_plTimer) m_plTimer->stop();
         m_hasPendingPl = false;
         for (int i = 0; i < m_list->count(); i++) setRowBold(m_list->item(i), false);
         renumber();
-        setControlsEnabled(false);
         m_status->setText(m_proc.exitCode() == 0 ? "stopped" : "mpv exited (code " + QString::number(m_proc.exitCode()) + ")");
-        m_audio->clear();
-        m_sub->clear();
         QFile::remove(m_sockPath);
         if (m_jf.active()) jfState(true, m_jf.title(), m_jf.paused());
     }
@@ -1678,8 +1704,13 @@ private:
             const QJsonObject o = QJsonDocument::fromJson(m_buf.left(nl)).object();
             m_buf.remove(0, nl + 1);
             if (o.value("event").toString() != "property-change") continue;
-            const QString n = o.value("name").toString();
-            const QJsonValue v = o.value("data");
+            onProp(o.value("name").toString(), o.value("data"));
+        }
+    }
+
+    // Property changes of whichever mpv the transport drives (ours, or the Jellyfin cast's).
+    void onProp(const QString& n, const QJsonValue& v) {
+        {
             if (n == "duration") {
                 m_duration = v.toDouble();
             } else if (n == "time-pos" && !v.isNull()) {
@@ -1739,6 +1770,7 @@ private:
 
     QSettings m_set{"mistercast", "mpv-mister-ui"};
     JellyfinReceiver m_jf;
+    bool m_castShown = false;   // the transport currently shows / drives a Jellyfin cast
     QCheckBox* m_jfOn;
     QLineEdit *m_jfName, *m_jfServer;
     QLabel *m_jfStatus, *m_jfLabel;

@@ -173,8 +173,14 @@ the receiver starts with misterMPV and stops when you close it; in Jellyfin choo
   the Jellyfin app or web page (or the MiSTer gamepad).
 - It uses the same output and picture settings as local playback (modeline, codec, field order, OSD, subtitles,
   brightness, scanlines, calibration); changes in the window apply to it too.
-- Idle it sends nothing to the MiSTer. Pressing Play in misterMPV stops a running cast, and a new cast stops local
-  playback, so there is only ever one sender. The status line shows `Jellyfin ▶ <title>` while a cast plays.
+- Idle it sends nothing to the MiSTer. Starting a playlist entry in misterMPV (double-click / Enter) stops a running
+  cast, and a new cast stops local playback, so there is only ever one sender. The status line shows
+  `Jellyfin ▶ <title>` while a cast plays.
+- While a cast plays, the window's transport controls it: Play/Pause, Stop, Prev/Next (the Jellyfin queue), seek bar,
+  -10/+10 s, volume, speed, audio and subtitle track, and the keyboard shortcuts. Pause, Stop and Prev/Next go through
+  the shim's own keys, so a SyncPlay group follows them; seek-bar jumps are passed on to the group as well, but the
+  shim ignores jumps of 10 s or less there (same as with its own keyboard), so -10/+10 s only moves your screen until
+  SyncPlay pulls it back. Volume and tracks stay local.
 - Subtitle position: the shim itself only knows top / middle / bottom and applies it on every file, so casts use the
   nearest of those.
 

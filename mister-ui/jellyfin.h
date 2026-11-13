@@ -13,6 +13,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -30,6 +31,9 @@ public:
     std::function<void(const QString& text)> onStatus;      // one-line state for the Setup dialog / main window
     std::function<void(const QString& code)> onLoginCode;   // Quick Connect code to enter in Jellyfin
     std::function<void()> onConnected;                      // IPC is up: push options / picture settings
+    // Playback properties of the cast (time-pos, duration, pause, track-list, volume, speed), for the
+    // window's transport controls. The last value of each is kept, see replay().
+    std::function<void(const QString& name, const QJsonValue& value)> onProperty;
 
     JellyfinReceiver() {
         m_retry.setInterval(1000);
@@ -41,7 +45,8 @@ public:
             m_retry.stop();
             m_restart.setInterval(5000);   // healthy again: next crash restarts quickly
             int id = 1;
-            for (const char* p : {"idle-active", "media-title", "pause"}) cmd({"observe_property", id++, p});
+            for (const char* p : {"idle-active", "media-title", "pause", "time-pos", "duration", "track-list", "volume", "speed"})
+                cmd({"observe_property", id++, p});
             m_ipcUp = true;
             if (!m_loggingIn) readyStatus();   // during sign-in the Quick Connect code stays on screen
             if (onConnected) onConnected();
@@ -110,6 +115,14 @@ public:
     }
 
     bool active() const { return m_active; }
+    // Hand the current values to onProperty again (the window takes over the controls mid-cast).
+    void replay() {
+        if (!onProperty) return;
+        for (auto it = m_props.cbegin(); it != m_props.cend(); ++it) onProperty(it.key(), it.value());
+    }
+    // The shim's own keys: pause/stop/next/prev pressed there go through its SyncPlay-aware code,
+    // so a whole SyncPlay group follows (a plain `cycle pause` would only pause this screen).
+    void key(const char* k) { cmd({"keypress", k}); }
     bool paused() const { return m_paused; }
     QString title() const { return m_title; }
     bool running() const { return m_proc.state() != QProcess::NotRunning; }
@@ -235,6 +248,7 @@ private:
             {"shader_pack_enable", false}, {"motion_interpolation", "off"}, {"deband", "off"},
             {"svp_enable", false}, {"input_gamepad", false}, {"hwdec", "no"},
             {"segment_intro", "off"}, {"segment_outro", "off"},   // "ask" would wait for a key on the CRT
+            {"kb_pause", "space"}, {"kb_stop", "q"}, {"kb_next", ">"}, {"kb_prev", "<"},   // see key()
         };
         for (auto it = ours.begin(); it != ours.end(); ++it) c.insert(it.key(), it.value());
         for (auto it = m_shimSettings.begin(); it != m_shimSettings.end(); ++it) c.insert(it.key(), it.value());
@@ -288,6 +302,10 @@ private:
             if (o.value("event").toString() != "property-change") continue;
             const QString n = o.value("name").toString();
             const QJsonValue v = o.value("data");
+            if (n != "idle-active" && n != "media-title") {
+                m_props.insert(n, v);
+                if (onProperty) onProperty(n, v);
+            }
             if (n == "idle-active") setActive(!v.toBool(true));
             else if (n == "media-title") { m_title = v.toString(); if (m_active && onState) onState(true, m_title, m_paused); }
             else if (n == "pause") { m_paused = v.toBool(); if (m_active && onState) onState(true, m_title, m_paused); }
@@ -310,5 +328,6 @@ private:
     QJsonObject m_shimSettings;
     QFile m_logFile;
     bool m_ipcUp = false;
+    QHash<QString, QJsonValue> m_props;
     bool m_enabled = false, m_active = false, m_paused = false, m_stopping = false, m_loggingIn = false;
 };

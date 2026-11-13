@@ -60,6 +60,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "jellyfin.h"
 #include "modeline_keys.h"
 
 // Collapsible section: a flat header button (arrow + title) above a content widget; the state is
@@ -343,6 +344,10 @@ public:
                           "L1/R1: previous/next, L2/R2: seek 60 s, Select: status on TV\n"
                           "(applies on the next Play)");
         misterRow->addWidget(sshBtn);
+        m_jfLabel = new QLabel;
+        m_jfLabel->setToolTip("Jellyfin receiver (Setup… → Jellyfin receiver)");
+        misterRow->addSpacing(8);
+        misterRow->addWidget(m_jfLabel, 1);
         og->addLayout(misterRow, 3, 0, 1, 4);
         connect(testBtn, &QPushButton::clicked, this, [this] { testConnection(); });
         connect(coreBtn, &QPushButton::clicked, this, [this] { launchCore(); });
@@ -617,10 +622,31 @@ public:
         installShortcuts();
         restoreGeometry(m_set.value("geometry").toByteArray());
         showTagProgress();
+
+        // Jellyfin receiver: state into the status line, output settings follow the UI.
+        m_jf.onStatus = [this](const QString& s) {
+            m_jfStatus->setText(s);
+            m_jfLabel->setText(s == "off" ? QString() : "Jellyfin: " + s.section(" - ", 0, 0));
+            m_jfLabel->setToolTip(s);
+        };
+        m_jf.onLoginCode = [this](const QString& code) {
+            m_jfStatus->setText("<b style='font-size:15pt'>" + code.toHtmlEscaped() + "</b><br>"
+                                "Enter this code in Jellyfin: user menu → Quick Connect");
+        };
+        m_jf.onState = [this](bool a, const QString& t, bool p) { jfState(a, t, p); };
+        m_jf.onConnected = [this] { applyView(); };
+        connect(m_host, &QLineEdit::editingFinished, this, [this] { m_set.setValue("host", m_host->text()); jfSync(); });
+        for (auto* c : {m_modeline, m_near, m_field, m_flicker})
+            connect(c, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { jfSync(); });
+        connect(m_pad, &QCheckBox::toggled, this, [this](bool) { jfSync(); });
+        m_jfName->setText(m_set.value("jfName", "MiSTer").toString());
+        m_jfOn->setChecked(m_set.value("jfOn", false).toBool());
+        QTimer::singleShot(0, this, [this] { jfApplySetup(); });
     }
 
 protected:
     void closeEvent(QCloseEvent* e) override {
+        m_jf.shutdown();   // the receiver lives and dies with the window
         m_set.setValue("geometry", saveGeometry());
         saveTags();
         QWidget::closeEvent(e);
@@ -835,7 +861,7 @@ private:
     // UDP reachability: the Groovy core answers CMD_GET_STATUS (1 byte, 0x05) from the FPGA.
     // A different source port counts as a new sender for the core, so don't do this mid-playback.
     void testConnection() {
-        if (m_proc.state() != QProcess::NotRunning) {
+        if (m_proc.state() != QProcess::NotRunning || m_jf.active()) {
             m_status->setText("Stop playback first - the MiSTer takes one sender at a time");
             return;
         }
@@ -931,6 +957,40 @@ private:
         cl->addWidget(m_pad);
         lay->addWidget(ctl);
 
+        auto* jf = new QGroupBox("Jellyfin receiver");
+        auto* jl = new QFormLayout(jf);
+        m_jfOn = new QCheckBox("Receive casts from Jellyfin (also SyncPlay)");
+        m_jfOn->setToolTip("Runs a private jellyfin-mpv-shim (own login, own device) that plays through this "
+                           "MiSTer while misterMPV is open. Idle it sends nothing to the MiSTer; local Play "
+                           "stops a running cast and a new cast stops local playback.");
+        m_jfName = new QLineEdit;
+        m_jfName->setToolTip("Device name shown in Jellyfin's cast / SyncPlay menu");
+        m_jfServer = new QLineEdit;
+        m_jfServer->setPlaceholderText("http://server:8096");
+        auto* jfLogin = new QPushButton("Sign in (Quick Connect)…");
+        jfLogin->setToolTip("Shows a code here; enter it in Jellyfin: user menu → Quick Connect");
+        m_jfStatus = new QLabel;
+        m_jfStatus->setWordWrap(true);
+        m_jfStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        auto* jfLoginRow = new QHBoxLayout;
+        jfLoginRow->addWidget(m_jfServer, 1);
+        jfLoginRow->addWidget(jfLogin);
+        jl->addRow("", m_jfOn);
+        jl->addRow("Device name:", m_jfName);
+        jl->addRow("Server:", jfLoginRow);
+        jl->addRow("State:", m_jfStatus);
+        lay->addWidget(jf);
+        connect(jfLogin, &QPushButton::clicked, m_setupDlg, [this] {
+            const QString srv = m_jfServer->text().trimmed();
+            if (srv.isEmpty()) { m_jfStatus->setText("Enter the server address first"); return; }
+            m_set.setValue("jfServer", srv);
+            m_set.setValue("jfName", m_jfName->text().trimmed());
+            m_jfOn->setChecked(true);
+            m_set.setValue("jfOn", true);
+            m_jf.configure(mpvPath(), m_jfName->text(), outputOptions(), shimSettings());
+            m_jf.signIn(srv);
+        });
+
         auto* ssh = new QGroupBox("MiSTer login (for \"Launch core\")");
         auto* sf = new QFormLayout(ssh);
         m_sshUser = new QLineEdit;
@@ -972,6 +1032,14 @@ private:
             m_set.setValue("corePathNlc", m_coreNlc->text().trimmed());
             m_set.setValue("corePathOrig", m_coreOrig->text().trimmed());
             m_set.setValue("pad", m_pad->isChecked());
+            const QString name = m_jfName->text().trimmed();
+            const bool renamed = name != m_set.value("jfName", "MiSTer").toString();
+            m_set.setValue("jfOn", m_jfOn->isChecked());
+            m_set.setValue("jfName", name);
+            m_set.setValue("jfServer", m_jfServer->text().trimmed());
+            if (renamed) m_jf.setEnabled(false);   // the name is read at shim start
+            jfApplySetup();
+            jfSync();
         });
         m_setupDlg->setMinimumWidth(480);
     }
@@ -983,6 +1051,11 @@ private:
         m_sshPort->setValue(m_set.value("sshPort", 22).toInt());
         m_coreNlc->setText(m_set.value("corePathNlc", kDefaultNlcCore).toString());
         m_coreOrig->setText(m_set.value("corePathOrig", kDefaultOrigCore).toString());
+        m_jfOn->setChecked(m_set.value("jfOn", false).toBool());
+        m_jfName->setText(m_set.value("jfName", "MiSTer").toString());
+        QString srv = m_set.value("jfServer").toString();
+        if (srv.isEmpty()) srv = JellyfinReceiver::mainShimServer();   // same server as the normal shim
+        m_jfServer->setText(srv);
         m_setupDlg->exec();
     }
 
@@ -1418,29 +1491,15 @@ private:
         m_set.setValue("fieldOrder", m_field->currentIndex());
         m_set.setValue("pad", m_pad->isChecked());
         m_set.setValue("flicker", m_flicker->currentIndex());
-        const QString ml = m_modeline->currentIndex() == 0 ? "auto" : m_modeline->currentText();
+        if (m_jf.active()) {   // one sender at a time: the local list wins over a running cast
+            m_jf.stopPlayback();
+            m_status->setText("Jellyfin playback stopped - playing locally");
+        }
         m_sockPath = QDir::temp().filePath(QString("mpv-mister-%1.sock").arg(QCoreApplication::applicationPid()));
         QFile::remove(m_sockPath);
         QStringList a = {"--no-config", "--vo=mister", "--ao=mister",
-                         "--vo-mister-host=" + m_host->text(), "--vo-mister-modeline=" + ml,
-                         "--vo-mister-near=" + QString::number(m_near->currentIndex()),
-                         "--osd-scale-by-window=no", "--osd-font-size=" + QString::number(m_osdSize->value()),
-                         "--osd-bold=yes", "--osd-border-size=2.5", "--osd-blur=0", "--osd-shadow-offset=0",
-                         "--vo-mister-color-order=" + QString(m_set.value("colorOrder", 0).toInt() ? "rgb" : "bgr"),
-                         "--vo-mister-pad=" + QString(m_pad->isChecked() ? "yes" : "no"),
-                         "--vo-mister-field-order=" + QString(m_field->currentIndex() ? "bff" : "tff"),
-                         "--vo-mister-flicker=" + QString(m_flicker->currentIndex() == 2 ? "full"
-                                                          : m_flicker->currentIndex() == 1 ? "light" : "off"),
-                         "--ao-mister-host=" + m_host->text(), "--ao-mister-modeline=" + ml,
-                         "--ao-mister-near=" + QString::number(m_near->currentIndex()),
-                         "--input-ipc-server=" + m_sockPath, "--no-terminal", "--idle=no",
-                         "--sub-auto=fuzzy",
-                         "--sub-scale=" + QString::number(m_subScale->value() / 100.0),
-                         "--sub-pos=" + QString::number(m_subPos->value()),
-                         "--sub-use-margins=" + QString(m_subBars->isChecked() ? "yes" : "no"),
-                         "--sub-ass-force-margins=" + QString(m_subBars->isChecked() ? "yes" : "no"),
-                         "--sub-color=" + subColorHex(),
-                         "--sub-ass-style-overrides=" + subColorAss()};
+                         "--input-ipc-server=" + m_sockPath, "--no-terminal", "--idle=no"};
+        for (const QString& o : outputOptions()) a << "--" + o;
         if (m_repeat->currentIndex() == 1) a << "--loop-file=inf";
         if (m_repeat->currentIndex() == 2) a << "--loop-playlist=inf";
         a << "--volume=" + QString::number(m_vol->value());
@@ -1458,6 +1517,57 @@ private:
         setLed(Led::Starting);
         m_tries = 0;
         m_retry.start();
+    }
+
+    // Output settings as mpv "key=value": passed as --key=value to our own mpv and written into the
+    // Jellyfin receiver's mpv.conf, so both play through the MiSTer the same way.
+    QStringList outputOptions() const {
+        const QString ml = m_modeline->currentIndex() == 0 ? "auto" : m_modeline->currentText();
+        const QString host = m_host->text().trimmed();
+        const QString nearMode = QString::number(m_near->currentIndex());
+        const QString bars = m_subBars->isChecked() ? "yes" : "no";
+        return {"vo-mister-host=" + host, "vo-mister-modeline=" + ml, "vo-mister-near=" + nearMode,
+                "vo-mister-color-order=" + QString(m_set.value("colorOrder", 0).toInt() ? "rgb" : "bgr"),
+                "vo-mister-pad=" + QString(m_pad->isChecked() ? "yes" : "no"),
+                "vo-mister-field-order=" + QString(m_field->currentIndex() ? "bff" : "tff"),
+                "vo-mister-flicker=" + QString(m_flicker->currentIndex() == 2 ? "full"
+                                               : m_flicker->currentIndex() == 1 ? "light" : "off"),
+                "ao-mister-host=" + host, "ao-mister-modeline=" + ml, "ao-mister-near=" + nearMode,
+                "osd-scale-by-window=no", "osd-font-size=" + QString::number(m_osdSize->value()),
+                "osd-bold=yes", "osd-border-size=2.5", "osd-blur=0", "osd-shadow-offset=0",
+                "sub-auto=fuzzy", "sub-scale=" + QString::number(m_subScale->value() / 100.0),
+                "sub-pos=" + QString::number(m_subPos->value()),
+                "sub-use-margins=" + bars, "sub-ass-force-margins=" + bars,
+                "sub-color=" + subColorHex(), "sub-ass-style-overrides=" + subColorAss()};
+    }
+
+    // ---- Jellyfin receiver ------------------------------------------------------------------
+    // The shim sets subtitle colour/size/position itself on every file, from its conf.json; it only
+    // knows top / middle / bottom, so the position slider maps to the nearest of those.
+    QJsonObject shimSettings() const {
+        const int pos = m_subPos->value();
+        return {{"subtitle_color", "#FF" + subColorHex().mid(1)},   // mpv's #AARRGGBB
+                {"subtitle_size", m_subScale->value()},
+                {"subtitle_position", pos >= 90 ? "bottom" : pos <= 20 ? "top" : "middle"}};
+    }
+    void jfSync() { m_jf.updateOptions(outputOptions(), shimSettings()); }
+    void jfApplySetup() {
+        m_jf.configure(mpvPath(), m_jfName->text(), outputOptions(), shimSettings());
+        m_jf.setEnabled(m_jfOn->isChecked());
+    }
+    void jfState(bool active, const QString& title, bool paused) {
+        if (active && m_proc.state() != QProcess::NotRunning) {   // a cast started: local playback yields
+            stop();
+            return;   // onStopped() shows the cast once our mpv is gone
+        }
+        if (m_proc.state() != QProcess::NotRunning) return;
+        if (active) {
+            setLed(paused ? Led::Paused : Led::Playing);
+            m_status->setText("Jellyfin ▶ " + (title.isEmpty() ? QString("…") : title));
+        } else {
+            setLed(Led::Stopped);
+            m_status->setText("stopped");
+        }
     }
 
     void stop() {
@@ -1482,6 +1592,7 @@ private:
         m_audio->clear();
         m_sub->clear();
         QFile::remove(m_sockPath);
+        if (m_jf.active()) jfState(true, m_jf.title(), m_jf.paused());
     }
 
     void onConnected() {
@@ -1504,7 +1615,9 @@ private:
     }
 
     // Live picture settings (sub size + aspect/format), also re-sent on every (re)connect.
+    // They go to the Jellyfin receiver's mpv as well, so a cast looks like local playback.
     void applyView() {
+        const auto cmd = [this](const QJsonArray& a) { this->cmd(a); m_jf.cmd(a); };
         m_set.setValue("subScale", m_subScale->value());
         m_set.setValue("subPos", m_subPos->value());
         m_set.setValue("subColor", m_subColor->currentIndex());
@@ -1543,6 +1656,7 @@ private:
         cmd({"set_property", "panscan", a == 2 ? 1.0 : 0.0});
         static const char* kOverride[] = {"-1", "-1", "-1", "4:3", "16:9", "21:9"};
         cmd({"set_property", "video-aspect-override", kOverride[a]});
+        jfSync();   // OSD / subtitle values also land in the receiver's mpv.conf
     }
 
     void cmd(const QJsonArray& args) {
@@ -1624,6 +1738,10 @@ private:
     }
 
     QSettings m_set{"mistercast", "mpv-mister-ui"};
+    JellyfinReceiver m_jf;
+    QCheckBox* m_jfOn;
+    QLineEdit *m_jfName, *m_jfServer;
+    QLabel *m_jfStatus, *m_jfLabel;
     QLineEdit *m_file, *m_host;
     QComboBox *m_modeline, *m_near, *m_field, *m_flicker, *m_audio, *m_sub, *m_aspect;
     QDoubleSpinBox *m_hsize, *m_vsize;

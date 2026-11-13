@@ -42,7 +42,8 @@ on the TV.
 
 - Build tools: `meson` (1.3 or newer), `ninja`, `zig` (0.15.2 or newer, tested with 0.16), `cmake`, Qt 6 base, a C/C++
   compiler, and mpv's usual development libraries (ffmpeg, libass, luajit, ...).
-- At runtime: `ffprobe` for tags and durations, optionally `yt-dlp` for YouTube.
+- At runtime: `ffprobe` for tags and durations, optionally `yt-dlp` for YouTube and `jellyfin-mpv-shim` (3.x) for
+  the Jellyfin receiver.
 
 Only one program may stream to the MiSTer at a time. Close MiSTerCast, RetroArch, `mister-groovy-relay` or another mpv
 first, otherwise the picture stalls.
@@ -161,6 +162,22 @@ colour, "subtitles in the black bars", artist/title overlay for music, colour or
 A button without a function flashes `Pad button 0x....` on the TV, which makes it easy to extend the mapping
 (`video/out/mister_pad.c`).
 
+**Jellyfin receiver (casting and SyncPlay).** With `jellyfin-mpv-shim` installed, misterMPV can show up in Jellyfin
+as a cast target, also for watching together with SyncPlay. In **Setup… → Jellyfin receiver** tick *Receive casts*,
+pick a device name (default `MiSTer`), check the server address (taken from your normal shim if you have one) and
+press **Sign in (Quick Connect)**: a code appears, enter it in Jellyfin under user menu → *Quick Connect*. From then on
+the receiver starts with misterMPV and stops when you close it; in Jellyfin choose the device name in the cast menu.
+
+- It is a private shim instance with its own login and device id in `~/.config/mistercast/jellyfin/`, so it never
+  gets in the way of a jellyfin-mpv-shim you run for the PC screen. Its library browser is off; control playback from
+  the Jellyfin app or web page (or the MiSTer gamepad).
+- It uses the same output and picture settings as local playback (modeline, codec, field order, OSD, subtitles,
+  brightness, scanlines, calibration); changes in the window apply to it too.
+- Idle it sends nothing to the MiSTer. Pressing Play in misterMPV stops a running cast, and a new cast stops local
+  playback, so there is only ever one sender. The status line shows `Jellyfin ▶ <title>` while a cast plays.
+- Subtitle position: the shim itself only knows top / middle / bottom and applies it on every file, so casts use the
+  nearest of those.
+
 ## Features
 
 - Output to the CRT: automatic modeline (25/50 fps to the 50 Hz modes, everything else 60 Hz), TFF/BFF field order,
@@ -174,6 +191,7 @@ A button without a function flashes `Pad button 0x....` on the TV, which makes i
   structure when the tag is missing; visualizers (spectrum, waves, vectorscope, spectrogram, bars); permanent
   artist/title overlay.
 - Subtitles: size, position, colour, placement in the black bars of letterboxed films.
+- Jellyfin receiver: cast target and SyncPlay through a private jellyfin-mpv-shim instance, same picture settings.
 - Convenience: status lamp, remembered window size, keyboard shortcuts, *Launch core* and *Test connection*.
 
 ## Screenshots

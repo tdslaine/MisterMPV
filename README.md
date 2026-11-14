@@ -259,6 +259,13 @@ brightness, contrast, saturation, black level, scanlines (four styles) and **CRT
 for your set's overscan, with a test pattern). **Setup…** holds the rarely changed options: OSD text size, subtitle
 colour, "subtitles in the black bars", artist/title overlay for music, colour order, gamepad on/off, SSH login.
 
+**Themes.** **Setup… → Display → Theme** changes the window's colours at once: *System* (your desktop's style, the
+default), *Light*, *Dark*, *Nord*, *Gruvbox Dark*, *Dracula*, *Solarized Dark*, *Catppuccin Mocha* and *Tokyo Night*.
+Apart from *System* they use Qt's Fusion style, so they look the same on every desktop and in the AppImage. The status
+lamp keeps its colours, because they mean something.
+
+![The nine themes](mister-ui/screenshots/themes.png)
+
 **Keyboard**
 
 | Key | Action |
@@ -443,7 +450,8 @@ window: `--mister-calibrate=yes` shows the pattern, the size and shift options a
   artist/title overlay.
 - Subtitles: size, position, colour, placement in the black bars of letterboxed films.
 - Jellyfin receiver: cast target and SyncPlay through a private jellyfin-mpv-shim instance, same picture settings.
-- Convenience: status lamp, remembered window size, keyboard shortcuts, *Launch core* and *Test connection*.
+- Convenience: status lamp, remembered window size, keyboard shortcuts, *Launch core*, *Test login* and
+  *Test connection*, nine colour themes (Light, Dark, Nord, Gruvbox, Dracula, Solarized, Catppuccin, Tokyo Night).
 
 ## Screenshots
 

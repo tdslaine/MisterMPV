@@ -49,6 +49,9 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QPalette>
+#include <QStyle>
+#include <QStyleFactory>
 #include <QHash>
 #include <QListWidget>
 #include <QTreeWidget>
@@ -68,6 +71,64 @@
 
 #include "jellyfin.h"
 #include "modeline_keys.h"
+
+// Colour themes: Fusion style + a palette, the same on every desktop (and in the AppImage, which has
+// no KDE style). "System" leaves the desktop's own style and colours alone.
+struct Theme {
+    const char* name;
+    const char *window, *base, *altBase, *text, *button, *highlight, *highlightText, *link, *mid, *disabled;
+};
+static const Theme kThemes[] = {
+    {"System", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+    {"Light", "#efefef", "#ffffff", "#f5f5f5", "#1e1e1e", "#e6e6e6", "#308cc6", "#ffffff", "#0b5cad", "#c4c4c4", "#9a9a9a"},
+    {"Dark", "#2b2b2b", "#1e1e1e", "#262626", "#e6e6e6", "#353535", "#3d7bd9", "#ffffff", "#6ea8fe", "#4a4a4a", "#7a7a7a"},
+    {"Nord", "#2e3440", "#3b4252", "#434c5e", "#eceff4", "#3b4252", "#88c0d0", "#2e3440", "#81a1c1", "#4c566a", "#7b88a1"},
+    {"Gruvbox Dark", "#282828", "#1d2021", "#32302f", "#ebdbb2", "#3c3836", "#d79921", "#282828", "#83a598", "#504945", "#928374"},
+    {"Dracula", "#282a36", "#21222c", "#2c2e3b", "#f8f8f2", "#343746", "#bd93f9", "#282a36", "#8be9fd", "#44475a", "#6272a4"},
+    {"Solarized Dark", "#002b36", "#073642", "#0a3f4c", "#93a1a1", "#073642", "#268bd2", "#fdf6e3", "#2aa198", "#586e75", "#657b83"},
+    {"Catppuccin Mocha", "#1e1e2e", "#181825", "#24243a", "#cdd6f4", "#313244", "#cba6f7", "#1e1e2e", "#89b4fa", "#45475a", "#6c7086"},
+    {"Tokyo Night", "#1a1b26", "#16161e", "#202230", "#c0caf5", "#24283b", "#7aa2f7", "#1a1b26", "#7dcfff", "#414868", "#565f89"},
+};
+static void applyTheme(const QString& name) {
+    static const QString sysStyle = QApplication::style()->name();   // captured on the first call
+    static const QPalette sysPalette = QApplication::palette();
+    const Theme* t = &kThemes[0];
+    for (const Theme& x : kThemes) if (name == x.name) t = &x;
+    if (!t->window) {
+        QApplication::setStyle(QStyleFactory::create(sysStyle));
+        QApplication::setPalette(sysPalette);
+        return;
+    }
+    QApplication::setStyle(QStyleFactory::create("Fusion"));
+    const QColor win(t->window), base(t->base), alt(t->altBase), text(t->text), btn(t->button),
+                 hl(t->highlight), hlText(t->highlightText), link(t->link), mid(t->mid), dis(t->disabled);
+    QPalette p;
+    p.setColor(QPalette::Window, win);
+    p.setColor(QPalette::WindowText, text);
+    p.setColor(QPalette::Base, base);
+    p.setColor(QPalette::AlternateBase, alt);
+    p.setColor(QPalette::Text, text);
+    p.setColor(QPalette::Button, btn);
+    p.setColor(QPalette::ButtonText, text);
+    p.setColor(QPalette::ToolTipBase, btn);
+    p.setColor(QPalette::ToolTipText, text);
+    p.setColor(QPalette::Highlight, hl);
+    p.setColor(QPalette::HighlightedText, hlText);
+    p.setColor(QPalette::Link, link);
+    p.setColor(QPalette::LinkVisited, link);
+    p.setColor(QPalette::PlaceholderText, dis);
+    p.setColor(QPalette::BrightText, QColor("#ff5555"));
+    p.setColor(QPalette::Light, btn.lighter(135));
+    p.setColor(QPalette::Midlight, btn.lighter(115));
+    p.setColor(QPalette::Mid, mid);
+    p.setColor(QPalette::Dark, btn.darker(160));
+    p.setColor(QPalette::Shadow, QColor(0, 0, 0));
+    for (auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText})
+        p.setColor(QPalette::Disabled, role, dis);
+    p.setColor(QPalette::Disabled, QPalette::Highlight, mid);
+    p.setColor(QPalette::Disabled, QPalette::HighlightedText, dis);
+    QApplication::setPalette(p);
+}
 
 // Collapsible section: a flat header button (arrow + title) above a content widget; the state is
 // remembered in QSettings and the window follows the new height.
@@ -127,6 +188,7 @@ class Window : public QWidget {
 public:
     Window() {
         migrateLogin();
+        applyTheme(m_set.value("theme", "System").toString());
         setWindowTitle("misterMPV");
         auto* root = new QVBoxLayout(this);
         root->setContentsMargins(12, 14, 12, 12);
@@ -1067,6 +1129,15 @@ private:
         df->addRow("Colour order:", m_colorOrder);
         df->addRow("", m_trackInfo);
         df->addRow("Artist / title position:", m_trackPos);
+        m_theme = new QComboBox;
+        for (const Theme& t : kThemes) m_theme->addItem(t.name);
+        m_theme->setCurrentText(m_set.value("theme", "System").toString());
+        m_theme->setToolTip("Colours of this window. System follows your desktop; the others look the same everywhere.");
+        connect(m_theme, &QComboBox::currentTextChanged, this, [this](const QString& n) {
+            m_set.setValue("theme", n);
+            applyTheme(n);
+        });
+        df->addRow("Theme:", m_theme);
         auto* geoBtn = new QPushButton("CRT geometry…");
         geoBtn->setToolTip("Picture size and position on the CRT, test pattern, and the per-modeline sync "
                            "fine-tune (also under Picture → CRT calibration…)");
@@ -1172,7 +1243,7 @@ private:
         btns->addWidget(ok);
         lay->addLayout(btns);
         connect(defaults, &QPushButton::clicked, m_setupDlg, [this] {
-            m_colorOrder->setCurrentIndex(0);
+            m_colorOrder->setCurrentIndex(0); m_theme->setCurrentText("System");
             for (QLineEdit* e : {m_sshHost, m_sshUser, m_sshPass, m_sshKey, m_coreNlc, m_coreOrig}) e->clear();
             m_sshPort->setValue(22);
             m_osdSize->setValue(28); m_trackInfo->setChecked(false); m_trackPos->setCurrentIndex(0); m_subColor->setCurrentIndex(0); m_subBars->setChecked(true); m_pad->setChecked(true);
@@ -2099,6 +2170,7 @@ private:
     PlaylistView* m_list;
     QDialog* m_calDlg;
     QComboBox* m_shiftMl;
+    QComboBox* m_theme = nullptr;
     QSpinBox *m_shiftH, *m_shiftV;
     QMap<QString, QPair<int, int>> m_shift;
     bool m_shiftLoading = false;

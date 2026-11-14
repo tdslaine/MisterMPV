@@ -16,6 +16,16 @@ UDP to the MiSTer at the CRT's own timing; audio is sent as 48 kHz PCM. Local fi
 and YouTube links go into one playlist. Subtitles, audio tracks and the rest of mpv come along. The MiSTer's gamepad
 controls the player and shows status text on the TV.
 
+## About
+
+misterMPV is a video player that casts from a Linux PC to a MiSTer and its CRT. I built it because none of the
+existing ways to get films, series and YouTube onto my CRT really suited me, and on Linux there was nothing usable at
+all. So I took mpv, gave it an output for the GroovyNLC core and put a small window on top. I use it on my own MiSTer
+and CRT.
+
+I did not build it alone: Claude AI agents (my "Claude minions") wrote much of the code and the documentation with me,
+under my direction and tested on my own MiSTer and CRT.
+
 ## Contents
 
 1. [Requirements](#requirements)

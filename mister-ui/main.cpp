@@ -44,6 +44,11 @@
 #include <QDirIterator>
 #include <QDBusInterface>
 #include <QDBusReply>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QInputDialog>
+#include <QMessageBox>
+#include <QRegularExpression>
 #include <QHash>
 #include <QListWidget>
 #include <QTreeWidget>
@@ -121,6 +126,7 @@ public:
 class Window : public QWidget {
 public:
     Window() {
+        migrateLogin();
         setWindowTitle("misterMPV");
         auto* root = new QVBoxLayout(this);
         root->setContentsMargins(12, 14, 12, 12);
@@ -128,15 +134,19 @@ public:
 
         auto* fileRow = new QHBoxLayout;
         m_file = new QLineEdit;
-        m_file->setPlaceholderText("URL (YouTube, stream, ...) or path");
+        m_file->setPlaceholderText("Stream or YouTube URL, smb:// share, or a path - then + URL");
         auto* browse = new QPushButton("+ File(s)");
         browse->setToolTip("Pick one or more files (also network shares) and add them to the playlist");
         auto* addDir = new QPushButton("+ Folder");
         addDir->setToolTip("Add all media files of a folder (including subfolders)");
-        auto* addUrl = new QPushButton("Add to PL");
-        addUrl->setToolTip("Add the file/URL in the box to the playlist");
+        auto* addUrl = new QPushButton("+ URL");
+        addUrl->setToolTip("Add what is in the box: a stream URL (http, HLS .m3u8), a YouTube link (needs yt-dlp), "
+                           "an smb:// share (needs kio-fuse) or a local path");
+        auto* addShare = new QPushButton("+ Network share…");
+        addShare->setToolTip("Add a file or folder from an SMB share (smb://server/share/...), mounted through kio-fuse");
         fileRow->addWidget(m_file);
         fileRow->addWidget(addUrl);
+        fileRow->addWidget(addShare);
 
         m_list = new PlaylistView;
         m_list->setMinimumHeight(110);
@@ -398,6 +408,40 @@ public:
         calRow->addWidget(m_calib, 1);
         calRow->addWidget(calReset);
         cf->addRow(calRow);
+
+        // Modeline fine-tune: moves the sync pulse of one modeline, so the whole picture shifts on the CRT
+        // without losing pixels (unlike the shift above, which moves the picture inside the raster).
+        auto* fine = new QGroupBox("Modeline fine-tune (sync position, per modeline)");
+        auto* ff = new QFormLayout(fine);
+        m_shiftMl = new QComboBox;
+        for (const char* k : kModelineKeys) m_shiftMl->addItem(k);
+        m_shiftMl->setToolTip("The modeline to adjust. With Modeline = auto, misterMPV picks 240p/480i (60 Hz) or "
+                              "288p/576i (50 Hz) from the source; adjust each mode you use once.");
+        m_shiftH = new QSpinBox; m_shiftH->setRange(-16, 16); m_shiftH->setSuffix(" px");
+        m_shiftV = new QSpinBox; m_shiftV->setRange(-8, 8); m_shiftV->setSuffix(" lines");
+        m_shiftH->setToolTip("+ moves the picture right. Applied live; limited to what the blanking allows.");
+        m_shiftV->setToolTip("+ moves the picture down. Applied live; limited to what the blanking allows.");
+        auto* shiftReset = new QPushButton("Reset this modeline");
+        ff->addRow("Modeline:", m_shiftMl);
+        ff->addRow("Horizontal:", m_shiftH);
+        ff->addRow("Vertical:", m_shiftV);
+        ff->addRow("", shiftReset);
+        cf->addRow(fine);
+        loadSyncShift();
+        {
+            const QString cur = m_modeline->currentIndex() > 0 ? m_modeline->currentText()
+                                                                : m_set.value("syncShiftLast", "640x480i60").toString();
+            const int i = m_shiftMl->findText(cur);
+            m_shiftMl->setCurrentIndex(i >= 0 ? i : 0);
+            showSyncShift();
+        }
+        connect(m_shiftMl, &QComboBox::currentTextChanged, this, [this](const QString& k) {
+            m_set.setValue("syncShiftLast", k);
+            showSyncShift();
+        });
+        for (QSpinBox* sp : {m_shiftH, m_shiftV})
+            connect(sp, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { storeSyncShift(); });
+        connect(shiftReset, &QPushButton::clicked, this, [this] { m_shiftH->setValue(0); m_shiftV->setValue(0); });
         m_calDlg->setMinimumWidth(460);
         connect(calBtn, &QPushButton::clicked, this, [this] { m_calDlg->show(); m_calDlg->raise(); });
         connect(m_calDlg, &QDialog::finished, this, [this] { m_calib->setChecked(false); });
@@ -504,8 +548,10 @@ public:
         });
         connect(addUrl, &QPushButton::clicked, this, [this] {
             const QString f = m_file->text().trimmed();
-            if (!f.isEmpty()) { addEntry(resolveLocation(f)); m_file->clear(); }
+            if (f.isEmpty()) return;
+            if (addLocation(f)) m_file->clear();
         });
+        connect(addShare, &QPushButton::clicked, this, [this] { addNetworkShare(); });
         connect(m_file, &QLineEdit::returnPressed, addUrl, &QPushButton::click);
         connect(plRemove, &QPushButton::clicked, this, [this] { removeSelected(); });
         connect(plClear, &QPushButton::clicked, this, [this] {
@@ -885,15 +931,45 @@ private:
         }
     }
 
-    // SSH password via SSH_ASKPASS (no sshpass needed); the password only lives in the child's env.
-    void launchCore() {
-        if (m_ssh.state() != QProcess::NotRunning) return;
-        const QString host = m_host->text().trimmed();
-        if (host.isEmpty()) { m_status->setText("Enter the MiSTer IP first"); return; }
+    // SSH login for "Launch core" / "Test login". From the Setup fields (test before saving) or the stored file.
+    struct SshLogin { QString host, user, pass, key, nlc, orig; int port = 22; };
+    SshLogin storedLogin() const {
+        SshLogin l;
+        l.host = m_login.value("sshHost").toString().trimmed();
+        l.user = m_login.value("sshUser").toString().trimmed();
+        l.pass = m_login.value("sshPass").toString();
+        l.key = m_login.value("sshKey").toString().trimmed();
+        l.port = m_login.value("sshPort", 22).toInt();
+        l.nlc = m_login.value("corePathNlc").toString().trimmed();
+        l.orig = m_login.value("corePathOrig").toString().trimmed();
+        return l;
+    }
+    SshLogin fieldLogin() const {
+        SshLogin l;
+        l.host = m_sshHost->text().trimmed(); l.user = m_sshUser->text().trimmed(); l.pass = m_sshPass->text();
+        l.key = m_sshKey->text().trimmed(); l.port = m_sshPort->value();
+        l.nlc = m_coreNlc->text().trimmed(); l.orig = m_coreOrig->text().trimmed();
+        return l;
+    }
+    static QString knownHostsPath() { return configDir() + "/misterMPV-known_hosts"; }
+    // Core path patterns go into a remote shell command: allow path and wildcard characters only.
+    static bool safePattern(const QString& p) {
+        static const QRegularExpression ok("^[A-Za-z0-9_./*?\\[\\]+-]+$");
+        return ok.match(p).hasMatch();
+    }
+
+    // Runs `remote` on the MiSTer with ssh. The password (if any) reaches ssh through SSH_ASKPASS and only
+    // lives in the child's environment; keys and ssh-agent are tried first by ssh itself.
+    // The MiSTer's host key is remembered on first contact (accept-new) in our own known_hosts file.
+    bool runSsh(const SshLogin& l, const QString& remote, int mode, QLabel* out) {
+        if (m_ssh.state() != QProcess::NotRunning) return false;
+        const QString host = l.host.isEmpty() ? m_host->text().trimmed() : l.host;
+        if (host.isEmpty()) { out->setText("Enter the MiSTer IP first"); return false; }
+        if (l.user.isEmpty()) { out->setText("Enter the SSH user in Setup… (a stock MiSTer uses root)"); return false; }
         const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
         const QString askpass = dir + QString("/misterMPV-askpass-%1.sh").arg(QCoreApplication::applicationPid());
         QFile f(askpass);
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { m_status->setText("Cannot write askpass helper"); return; }
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) { out->setText("Cannot write askpass helper"); return false; }
         f.write("#!/bin/sh\nprintf '%s\\n' \"$MISTER_SSH_PW\"\n");
         f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
         f.close();
@@ -901,31 +977,73 @@ private:
         QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
         env.insert("SSH_ASKPASS", askpass);
         env.insert("SSH_ASKPASS_REQUIRE", "force");
-        env.insert("MISTER_SSH_PW", m_set.value("sshPass", "1").toString());
+        env.insert("MISTER_SSH_PW", l.pass);
         m_ssh.setProcessEnvironment(env);
         m_ssh.setStandardInputFile(QProcess::nullDevice());
-        const QString user = m_set.value("sshUser", "root").toString();
-        const QString port = QString::number(m_set.value("sshPort", 22).toInt());
+        QStringList a = {"-p", QString::number(l.port), "-o", "StrictHostKeyChecking=accept-new",
+                         "-o", "UserKnownHostsFile=" + knownHostsPath(), "-o", "LogLevel=ERROR",
+                         "-o", "ConnectTimeout=5"};
+        if (!l.key.isEmpty()) {
+            QString k = l.key;
+            if (k.startsWith("~/")) k = QDir::homePath() + k.mid(1);
+            a << "-i" << k << "-o" << "IdentitiesOnly=yes";
+        }
+        if (l.pass.isEmpty()) a << "-o" << "BatchMode=yes";   // keys only: never hang on a prompt
+        a << l.user + "@" + host << remote;
+        m_sshMode = mode;
+        m_sshOut = out;
+        m_ssh.start("ssh", a);
+        return true;
+    }
+
+    void launchCore() {
+        const SshLogin l = storedLogin();
         const bool nlc = m_core->currentIndex() == 0;
-        QString pat = m_set.value(nlc ? "corePathNlc" : "corePathOrig", nlc ? kDefaultNlcCore : kDefaultOrigCore)
-                          .toString().trimmed();
+        QString pat = nlc ? l.nlc : l.orig;
         if (pat.isEmpty()) pat = nlc ? kDefaultNlcCore : kDefaultOrigCore;
+        if (!safePattern(pat)) { m_status->setText("Core path contains unsupported characters (Setup…)"); return; }
         const QString remote =
             "f=$(ls -t " + pat + " 2>/dev/null | head -1); [ -n \"$f\" ] || exit 3; "
             "echo \"load_core $f\" > /dev/MiSTer_cmd";
-        m_ssh.start("ssh", {"-p", port, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
-                            "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", user + "@" + host, remote});
-        m_status->setText("Loading Groovy core on the MiSTer…");
+        if (runSsh(l, remote, 0, m_status)) m_status->setText("Loading Groovy core on the MiSTer…");
+    }
+    // Setup… → Test login: log in with the fields as they are and show which core files would be loaded.
+    void testLogin() {
+        const SshLogin l = fieldLogin();
+        const QString nlc = l.nlc.isEmpty() ? kDefaultNlcCore : l.nlc;
+        const QString orig = l.orig.isEmpty() ? kDefaultOrigCore : l.orig;
+        if (!safePattern(nlc) || !safePattern(orig)) { m_loginStatus->setText("A core path contains unsupported characters"); return; }
+        const QString remote = "echo \"NLC: $(ls -t " + nlc + " 2>/dev/null | head -1)\"; "
+                               "echo \"Groovy: $(ls -t " + orig + " 2>/dev/null | head -1)\"";
+        if (runSsh(l, remote, 1, m_loginStatus)) m_loginStatus->setText("Logging in…");
     }
     void onSshFinished(int code) {
         if (!m_askpass.isEmpty()) { QFile::remove(m_askpass); m_askpass.clear(); }
+        QLabel* out = m_sshOut ? m_sshOut : m_status;
+        const QString err = QString::fromUtf8(m_ssh.readAllStandardError()).trimmed();
+        if (err.contains("IDENTIFICATION HAS CHANGED") || err.contains("Host key verification failed")) {
+            out->setText("The MiSTer's SSH host key has changed (new SD card or reinstall?). If that is expected, "
+                         "delete " + knownHostsPath() + " and try again.");
+            return;
+        }
+        if (code == 255 || (code != 0 && code != 3)) {
+            out->setText("SSH failed (" + QString::number(code) + "): " +
+                         (err.isEmpty() ? QString("check host, user, password or key") : err.left(160)));
+            return;
+        }
+        if (m_sshMode == 1) {
+            QStringList lines;
+            for (QString ln : QString::fromUtf8(m_ssh.readAllStandardOutput()).split('\n', Qt::SkipEmptyParts)) {
+                if (ln.trimmed().endsWith(':')) ln = ln.trimmed() + " (no file found)";
+                lines << ln.trimmed();
+            }
+            out->setText("Login OK.\n" + lines.join('\n'));
+            return;
+        }
         if (code == 0)
-            m_status->setText((m_core->currentIndex() == 0 ? "GroovyNLC" : "Groovy") + QString(" core loading - give it a few seconds, then \"Test connection\""));
-        else if (code == 3)
-            m_status->setText("No core file found on the MiSTer (check the core path in Setup…)");
+            out->setText((m_core->currentIndex() == 0 ? "GroovyNLC" : "Groovy") + QString(" core loading - give it a few seconds, then \"Test connection\""));
         else
-            m_status->setText("SSH failed (" + QString::number(code) + "): " +
-                              QString::fromUtf8(m_ssh.readAllStandardError()).trimmed().left(160));
+            out->setText("No core file found on the MiSTer (check the core path in Setup…)");
     }
     static inline const QString kDefaultNlcCore = "/media/fat/_Utility/GroovyNLC_*.rbf";
     static inline const QString kDefaultOrigCore = "/media/fat/_Utility/Groovy_*.rbf";
@@ -949,6 +1067,14 @@ private:
         df->addRow("Colour order:", m_colorOrder);
         df->addRow("", m_trackInfo);
         df->addRow("Artist / title position:", m_trackPos);
+        auto* geoBtn = new QPushButton("CRT geometry…");
+        geoBtn->setToolTip("Picture size and position on the CRT, test pattern, and the per-modeline sync "
+                           "fine-tune (also under Picture → CRT calibration…)");
+        connect(geoBtn, &QPushButton::clicked, m_setupDlg, [this] {
+            m_setupDlg->accept();   // saves Setup, then the (non-modal) calibration dialog opens
+            m_calDlg->show(); m_calDlg->raise();
+        });
+        df->addRow("Picture on the CRT:", geoBtn);
         lay->addWidget(disp);
 
         auto* ctl = new QGroupBox("Control");
@@ -992,22 +1118,50 @@ private:
 
         auto* ssh = new QGroupBox("MiSTer login (for \"Launch core\")");
         auto* sf = new QFormLayout(ssh);
+        m_sshHost = new QLineEdit;
+        m_sshHost->setPlaceholderText("empty = the MiSTer IP from the main window");
         m_sshUser = new QLineEdit;
+        m_sshUser->setPlaceholderText("root on a stock MiSTer");
         m_sshPass = new QLineEdit;
         m_sshPass->setEchoMode(QLineEdit::Password);
-        m_sshPass->setToolTip("Stored unencrypted in the settings file (MiSTer default: root / 1).");
+        m_sshPass->setPlaceholderText("1 on a stock MiSTer; empty if you use a key");
+        m_sshKey = new QLineEdit;
+        m_sshKey->setPlaceholderText("optional, e.g. ~/.ssh/id_ed25519");
+        auto* keyBrowse = new QPushButton("…");
+        keyBrowse->setFixedWidth(32);
+        connect(keyBrowse, &QPushButton::clicked, m_setupDlg, [this] {
+            const QString f = QFileDialog::getOpenFileName(m_setupDlg, "SSH private key", QDir::homePath() + "/.ssh");
+            if (!f.isEmpty()) m_sshKey->setText(f);
+        });
+        auto* keyRow = new QHBoxLayout;
+        keyRow->addWidget(m_sshKey, 1);
+        keyRow->addWidget(keyBrowse);
         m_sshPort = new QSpinBox;
         m_sshPort->setRange(1, 65535);
         m_coreNlc = new QLineEdit;
-        m_coreNlc->setToolTip("File (or glob) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
+        m_coreNlc->setPlaceholderText(kDefaultNlcCore + " (used when empty)");
+        m_coreNlc->setToolTip("File (or wildcard) of the GroovyNLC core on the MiSTer; the newest match is loaded.");
         m_coreOrig = new QLineEdit;
-        m_coreOrig->setToolTip("File (or glob) of the original Groovy core; the newest match is loaded.");
+        m_coreOrig->setPlaceholderText(kDefaultOrigCore + " (used when empty)");
+        m_coreOrig->setToolTip("File (or wildcard) of the original Groovy core; the newest match is loaded.");
+        auto* testLoginBtn = new QPushButton("Test login");
+        testLoginBtn->setToolTip("Logs in with these values and shows which core files \"Launch core\" would load");
+        connect(testLoginBtn, &QPushButton::clicked, m_setupDlg, [this] { testLogin(); });
+        m_loginStatus = new QLabel;
+        m_loginStatus->setWordWrap(true);
+        m_loginStatus->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        sf->addRow("SSH host:", m_sshHost);
         sf->addRow("SSH user:", m_sshUser);
         sf->addRow("SSH password:", m_sshPass);
+        sf->addRow("SSH key file:", keyRow);
         sf->addRow("SSH port:", m_sshPort);
         sf->addRow("GroovyNLC core:", m_coreNlc);
         sf->addRow("Groovy core (original):", m_coreOrig);
-        sf->addRow(new QLabel("Streaming uses UDP 32100 (fixed by the Groovy core)."));
+        sf->addRow(testLoginBtn, m_loginStatus);
+        auto* note = new QLabel("Stored only on this PC, readable only by you:\n" +
+                                loginPath().replace(QDir::homePath(), "~"));
+        note->setWordWrap(true);
+        sf->addRow(note);
         lay->addWidget(ssh);
 
         auto* btns = new QHBoxLayout;
@@ -1018,18 +1172,22 @@ private:
         btns->addWidget(ok);
         lay->addLayout(btns);
         connect(defaults, &QPushButton::clicked, m_setupDlg, [this] {
-            m_colorOrder->setCurrentIndex(0); m_sshUser->setText("root"); m_sshPass->setText("1");
-            m_sshPort->setValue(22); m_coreNlc->setText(kDefaultNlcCore); m_coreOrig->setText(kDefaultOrigCore);
+            m_colorOrder->setCurrentIndex(0);
+            for (QLineEdit* e : {m_sshHost, m_sshUser, m_sshPass, m_sshKey, m_coreNlc, m_coreOrig}) e->clear();
+            m_sshPort->setValue(22);
             m_osdSize->setValue(28); m_trackInfo->setChecked(false); m_trackPos->setCurrentIndex(0); m_subColor->setCurrentIndex(0); m_subBars->setChecked(true); m_pad->setChecked(true);
         });
         connect(ok, &QPushButton::clicked, m_setupDlg, &QDialog::accept);
         connect(m_setupDlg, &QDialog::accepted, this, [this] {
             m_set.setValue("colorOrder", m_colorOrder->currentIndex());
-            m_set.setValue("sshUser", m_sshUser->text().trimmed());
-            m_set.setValue("sshPass", m_sshPass->text());
-            m_set.setValue("sshPort", m_sshPort->value());
-            m_set.setValue("corePathNlc", m_coreNlc->text().trimmed());
-            m_set.setValue("corePathOrig", m_coreOrig->text().trimmed());
+            m_login.setValue("sshHost", m_sshHost->text().trimmed());
+            m_login.setValue("sshUser", m_sshUser->text().trimmed());
+            m_login.setValue("sshPass", m_sshPass->text());
+            m_login.setValue("sshKey", m_sshKey->text().trimmed());
+            m_login.setValue("sshPort", m_sshPort->value());
+            m_login.setValue("corePathNlc", m_coreNlc->text().trimmed());
+            m_login.setValue("corePathOrig", m_coreOrig->text().trimmed());
+            saveLogin();
             m_set.setValue("pad", m_pad->isChecked());
             const QString name = m_jfName->text().trimmed();
             const bool renamed = name != m_set.value("jfName", "MiSTer").toString();
@@ -1040,16 +1198,16 @@ private:
             jfApplySetup();
             jfSync();
         });
-        m_setupDlg->setMinimumWidth(480);
+        m_setupDlg->setMinimumWidth(540);
     }
 
     void sshDialog() {   // "Setup…" button: reload the stored values, then show
         m_colorOrder->setCurrentIndex(m_set.value("colorOrder", 0).toInt());
-        m_sshUser->setText(m_set.value("sshUser", "root").toString());
-        m_sshPass->setText(m_set.value("sshPass", "1").toString());
-        m_sshPort->setValue(m_set.value("sshPort", 22).toInt());
-        m_coreNlc->setText(m_set.value("corePathNlc", kDefaultNlcCore).toString());
-        m_coreOrig->setText(m_set.value("corePathOrig", kDefaultOrigCore).toString());
+        const SshLogin l = storedLogin();
+        m_sshHost->setText(l.host); m_sshUser->setText(l.user); m_sshPass->setText(l.pass);
+        m_sshKey->setText(l.key); m_sshPort->setValue(l.port);
+        m_coreNlc->setText(l.nlc); m_coreOrig->setText(l.orig);
+        m_loginStatus->clear();
         m_jfOn->setChecked(m_set.value("jfOn", false).toBool());
         m_jfName->setText(m_set.value("jfName", "MiSTer").toString());
         QString srv = m_set.value("jfServer").toString();
@@ -1425,6 +1583,72 @@ private:
         m_set.setValue("playlist", l);
     }
     // While mpv runs it owns the list (it reports back via the "playlist" property).
+    // URL box / network share: folders are scanned, YouTube links get a yt-dlp check.
+    bool addLocation(const QString& f) {
+        const QUrl u(f);
+        const QString scheme = u.scheme().toLower();
+        if ((scheme == "http" || scheme == "https") && needsYtdl(u) && !haveYtdl()) {
+            QMessageBox::warning(this, "yt-dlp not found",
+                "YouTube links are opened through yt-dlp, which is not installed (or not on the PATH).\n\n"
+                "Install it from your distribution (e.g. 'pacman -S yt-dlp', 'apt install yt-dlp', "
+                "'dnf install yt-dlp') or with 'pipx install yt-dlp', then add the link again.");
+            m_status->setText("yt-dlp missing - YouTube link not added");
+            return false;
+        }
+        const bool share = QStringList{"smb", "sftp", "ftp", "davs", "webdav"}.contains(scheme);
+        const QString loc = resolveLocation(f);
+        if (share && loc == f) {
+            QMessageBox::warning(this, "Network share not available",
+                "misterMPV could not mount " + f + " through kio-fuse.\n\n" + kioFuseHint());
+            return false;
+        }
+        if (QFileInfo(loc).isDir()) addFolder(loc); else addEntry(loc);
+        return true;
+    }
+    static bool needsYtdl(const QUrl& u) {
+        const QString h = u.host().toLower();
+        return h == "youtu.be" || h.endsWith("youtube.com") || h.endsWith("youtube-nocookie.com");
+    }
+    static bool haveYtdl() {
+        return !QStandardPaths::findExecutable("yt-dlp").isEmpty() ||
+               !QStandardPaths::findExecutable("youtube-dl").isEmpty();
+    }
+    static bool haveKioFuse() {
+        auto* bus = QDBusConnection::sessionBus().interface();
+        if (!bus) return false;
+        if (bus->isServiceRegistered("org.kde.KIOFuse")) return true;
+        const QDBusReply<QStringList> act = bus->call("ListActivatableNames");
+        return act.isValid() && act.value().contains("org.kde.KIOFuse");
+    }
+    static QString kioFuseHint() {
+        return haveKioFuse()
+            ? QString("kio-fuse is running; check the address and that you are allowed to open the share "
+                      "(KDE asks for the password once and keeps it in KWallet).")
+            : QString("kio-fuse is not installed or not running (package 'kio-fuse', part of KDE). Without it, "
+                      "mount the share with your system's tools (e.g. 'gio mount smb://server/share' or a CIFS "
+                      "entry in /etc/fstab) and add the mounted folder with + Folder. See the README.");
+    }
+    void addNetworkShare() {
+        if (!haveKioFuse()) {
+            QMessageBox::information(this, "Network share", kioFuseHint());
+            return;
+        }
+        bool ok = false;
+        const QString url = QInputDialog::getText(this, "Add network share",
+            "SMB address of a folder or file, for example\n"
+            "smb://server/Videos/Films   or   smb://user@server/Videos/film.mkv\n"
+            "(never put a password here; KDE asks for it and keeps it in KWallet):",
+            QLineEdit::Normal, m_set.value("lastShare", "smb://").toString(), &ok).trimmed();
+        if (!ok || url.isEmpty() || url == "smb://") return;
+        if (!QUrl(url).password().isEmpty()) {
+            QMessageBox::warning(this, "Network share", "Please leave the password out of the address.");
+            return;
+        }
+        m_set.setValue("lastShare", url);
+        m_status->setText("Mounting " + url + " …");
+        if (addLocation(url)) m_status->setText("Added " + url);
+    }
+
     void addEntry(const QString& f) {
         if (running()) cmd({"loadfile", f, "append"}); else addLocal(f);
         savePlaylist();
@@ -1533,6 +1757,7 @@ private:
                 "vo-mister-flicker=" + QString(m_flicker->currentIndex() == 2 ? "full"
                                                : m_flicker->currentIndex() == 1 ? "light" : "off"),
                 "ao-mister-host=" + host, "ao-mister-modeline=" + ml, "ao-mister-near=" + nearMode,
+                "mister-sync-shift=" + m_set.value("syncShift").toString(),
                 "osd-scale-by-window=no", "osd-font-size=" + QString::number(m_osdSize->value()),
                 "osd-bold=yes", "osd-border-size=2.5", "osd-blur=0", "osd-shadow-offset=0",
                 "sub-auto=fuzzy", "sub-scale=" + QString::number(m_subScale->value() / 100.0),
@@ -1688,6 +1913,36 @@ private:
         jfSync();   // OSD / subtitle values also land in the receiver's mpv.conf
     }
 
+    // Sync position fine-tune per modeline, stored as "key:h:v,key:h:v" (same text as --mister-sync-shift).
+    void loadSyncShift() {
+        m_shift.clear();
+        for (const QString& e : m_set.value("syncShift").toString().split(',', Qt::SkipEmptyParts)) {
+            const QStringList f = e.split(':');
+            if (f.size() == 3) m_shift[f[0]] = {f[1].toInt(), f[2].toInt()};
+        }
+    }
+    QString syncShiftSpec() const {
+        QStringList out;
+        for (auto it = m_shift.cbegin(); it != m_shift.cend(); ++it)
+            if (it.value().first || it.value().second)
+                out << QString("%1:%2:%3").arg(it.key()).arg(it.value().first).arg(it.value().second);
+        return out.join(',');
+    }
+    void showSyncShift() {
+        const auto v = m_shift.value(m_shiftMl->currentText(), {0, 0});
+        m_shiftLoading = true;
+        m_shiftH->setValue(v.first);
+        m_shiftV->setValue(v.second);
+        m_shiftLoading = false;
+    }
+    void storeSyncShift() {
+        if (m_shiftLoading) return;
+        m_shift[m_shiftMl->currentText()] = {m_shiftH->value(), m_shiftV->value()};
+        m_set.setValue("syncShift", syncShiftSpec());
+        cmd({"set_property", "mister-sync-shift", syncShiftSpec()});
+        jfSync();
+    }
+
     void cmd(const QJsonArray& args) {
         if (m_sock.state() != QLocalSocket::ConnectedState) return;
         m_sock.write(QJsonDocument(QJsonObject{{"command", args}}).toJson(QJsonDocument::Compact) + "\n");
@@ -1772,6 +2027,33 @@ private:
     }
 
     QSettings m_set{"mistercast", "mpv-mister-ui"};
+    // SSH login and core paths live in their own file, readable only by the user (chmod 600).
+    static QString configDir() {
+        return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/mistercast";
+    }
+    static QString loginPath() {
+        QDir().mkpath(configDir());
+        const QString p = configDir() + "/misterMPV-login.conf";
+        if (!QFileInfo::exists(p)) { QFile f(p); if (f.open(QIODevice::WriteOnly)) f.close(); }
+        QFile::setPermissions(p, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        return p;
+    }
+    QSettings m_login{loginPath(), QSettings::IniFormat};
+    void saveLogin() {
+        m_login.sync();
+        QFile::setPermissions(m_login.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    }
+    // Older versions kept the login in the general settings file: move it over once.
+    void migrateLogin() {
+        bool moved = false;
+        for (const char* k : {"sshUser", "sshPass", "sshPort", "corePathNlc", "corePathOrig"}) {
+            if (!m_set.contains(k)) continue;
+            if (!m_login.contains(k)) m_login.setValue(k, m_set.value(k));
+            m_set.remove(k);
+            moved = true;
+        }
+        if (moved) { m_set.sync(); saveLogin(); }
+    }
     JellyfinReceiver m_jf;
     bool m_castShown = false;   // the transport currently shows / drives a Jellyfin cast
     QCheckBox* m_jfOn;
@@ -1803,7 +2085,10 @@ private:
     QCheckBox* m_pad;
     QDialog* m_setupDlg;
     QComboBox* m_colorOrder;
-    QLineEdit *m_sshUser, *m_sshPass, *m_coreNlc, *m_coreOrig;
+    QLineEdit *m_sshHost, *m_sshUser, *m_sshPass, *m_sshKey, *m_coreNlc, *m_coreOrig;
+    QLabel* m_loginStatus = nullptr;
+    QLabel* m_sshOut = nullptr;
+    int m_sshMode = 0;   // 0 launch core, 1 test login
     QSpinBox* m_sshPort;
     QSpinBox *m_vol;
     QDoubleSpinBox* m_speed;
@@ -1813,6 +2098,10 @@ private:
     QCheckBox* m_shuffle;
     PlaylistView* m_list;
     QDialog* m_calDlg;
+    QComboBox* m_shiftMl;
+    QSpinBox *m_shiftH, *m_shiftV;
+    QMap<QString, QPair<int, int>> m_shift;
+    bool m_shiftLoading = false;
     QPushButton *m_prev, *m_next;
     QSlider* m_seek;
     QLabel *m_time = nullptr, *m_status = nullptr, *m_led = nullptr;

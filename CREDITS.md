@@ -35,6 +35,7 @@ which license**. If something here is wrong or missing, please open an issue.
 |---|---|
 | [FFmpeg](https://ffmpeg.org) | decoding in mpv; `ffprobe` for tags/durations |
 | [libass](https://github.com/libass/libass), [LuaJIT](https://luajit.org) | subtitles / mpv scripting (our Lua scripts) |
+| [libplacebo](https://code.videolan.org/videolan/libplacebo) (LGPL-2.1+) | required by mpv; bundled in the AppImage |
 | [Qt 6](https://www.qt.io) | the control window (LGPL) |
 | [Zig](https://ziglang.org), [Meson](https://mesonbuild.com), [Ninja](https://ninja-build.org), [CMake](https://cmake.org) | build |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube and other stream URLs (via mpv's `ytdl_hook`) |

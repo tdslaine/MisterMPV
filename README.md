@@ -42,7 +42,8 @@ under my direction and tested on my own MiSTer and CRT.
 12. [How it works](#how-it-works)
 13. [Repository layout](#repository-layout)
 14. [FAQ](#faq)
-15. [Documentation, credits, license](#documentation-credits-license)
+15. [Thanks](#thanks)
+16. [Documentation, credits, license](#documentation-credits-license)
 
 ## Requirements
 
@@ -525,6 +526,35 @@ integration are the Linux-specific parts.
 `git fetch origin && git merge origin/master`, then `meson setup --wipe build` and rebuild. Conflicts can only occur in
 the few hook lines listed under "Repository layout".
 </details>
+
+## Thanks
+
+misterMPV is a small layer on top of a lot of other people's work. A big, heartfelt thank you to:
+
+- the **[mpv](https://mpv.io)** team: misterMPV is mpv, with everything that makes it good;
+- **[FFmpeg](https://ffmpeg.org)**, which decodes every file and stream, and **[libplacebo](https://code.videolan.org/videolan/libplacebo)**
+  (Niklas Haas and VideoLAN);
+- **[verbst](https://github.com/verbst)** for the GroovyNLC core and the NLC codec in
+  [Groovy_MiSTer](https://github.com/verbst/Groovy_MiSTer), without which nothing here would reach the CRT;
+- **[psakhis](https://github.com/psakhis)** for the [Groovy_MiSTer](https://github.com/psakhis/Groovy_MiSTer) core and
+  the streaming protocol everything here speaks;
+- **Calamity** ([Antonio Giner](https://github.com/antonioginer)) for [GroovyMAME](https://github.com/antonioginer/GroovyMAME)
+  and [Switchres](https://github.com/antonioginer/switchres), which the Groovy core was developed and tested with;
+- **[Sorgelig](https://github.com/sorgelig)** (Alexey Melnikov) and everyone in the [MiSTer FPGA](https://github.com/MiSTer-devel/Main_MiSTer)
+  project for the platform itself;
+- **[iequalshane](https://github.com/iequalshane)** (Shane Lynch) for [MiSTerCast](https://github.com/iequalshane/MiSTerCast),
+  which my Linux port of MiSTerCast, and with it this player, grew out of;
+- **[Dylan Wreggelsworth](https://github.com/dylan)** for [groovy-mister-zig](https://github.com/dylan/groovy-mister-zig), the
+  protocol library under the hood, and **[Frank Denis](https://github.com/jedisct1)** for
+  [zig-lz4](https://github.com/jedisct1/zig-lz4) (and Yann Collet for [LZ4](https://lz4.org));
+- **[idio-sync](https://github.com/idio-sync)** for [MiSTer_GroovyRelay](https://github.com/idio-sync/MiSTer_GroovyRelay)
+  and the flicker filter and calibration ideas;
+- the **[Jellyfin](https://jellyfin.org)** team and [Izzie Walton](https://github.com/iwalton3) for
+  [jellyfin-mpv-shim](https://github.com/jellyfin/jellyfin-mpv-shim);
+- the **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** team;
+- and libass, LuaJIT, Qt, Zig, Meson, KDE's kio-fuse, OpenSSH and podernixie's mode tables.
+
+Who made what, with licenses: [CREDITS.md](CREDITS.md).
 
 ## Documentation, credits, license
 

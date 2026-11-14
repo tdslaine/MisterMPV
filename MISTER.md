@@ -61,8 +61,9 @@ B5/B6 previous/next, B7 status text on the TV, B9/B10 seek -/+60 s. A button wit
 Qt6, talks to mpv over the JSON IPC socket (`--input-ipc-server`). Settings live in QSettings
 (`~/.config/mistercast/mpv-mister-ui.conf`; SSH login and core paths in `misterMPV-login.conf`, mode 600), tag cache in `~/.cache/misterMPV/misterMPV-tags2.json`.
 
-- *Output*: host, codec, modeline, format (aspect), field order, flicker filter, **Test connection** (UDP status
-  request, expects a 13-byte reply), **Launch core** (SSH: `load_core <newest matching .rbf>` into
+- *Output*: host, codec, modeline, format (aspect), field order, flicker filter, **Test connection** (UDP
+  CMD_GET_VERSION, which the GroovyNLC core answers without a session with its protocol version; falls back to
+  CMD_GET_STATUS to recognise the original Groovy core; not sent while streaming), **Launch core** (SSH: `load_core <newest matching .rbf>` into
   `/dev/MiSTer_cmd`; GroovyNLC or the original Groovy core), **Setup…**.
 - *Setup…*: OSD text size, subtitle colour, subtitles in the black bars, artist/title overlay, colour order,
   gamepad on/off, SSH login (default root/1, stored unencrypted) and core file patterns.

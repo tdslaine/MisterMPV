@@ -170,7 +170,10 @@ original core is only there so you can switch the MiSTer back to it for other pr
 If the core file is in another folder, enter that path, for example `/media/fat/_Utility/GroovyNLC_20260712.rbf` or
 `/media/fat/cores/GroovyNLC_*.rbf`. If no file matches, the status line says so.
 
-**Test connection** sends one UDP packet to port 32100 and reports whether the core answers. It needs no SSH.
+**Test connection** asks the core on UDP port 32100 for its protocol version and reports *GroovyNLC core answered
+… - ready*, a hint if only the original Groovy core is running, or *No reply* if no core is loaded or the IP is
+wrong. It needs no SSH. While misterMPV is streaming it does not test (the core serves one sender at a time) and
+just says that the connection is evidently working; press Stop first to run the test.
 
 **Where the login is stored, keys and host key.** The login and the core paths are stored only on your PC, in
 `~/.config/mistercast/misterMPV-login.conf`, which misterMPV keeps readable only by you (`chmod 600`). The password is

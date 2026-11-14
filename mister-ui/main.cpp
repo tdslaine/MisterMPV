@@ -983,30 +983,51 @@ private:
 
     // UDP reachability: the Groovy core answers CMD_GET_STATUS (1 byte, 0x05) from the FPGA.
     // A different source port counts as a new sender for the core, so don't do this mid-playback.
+    // Asks the core for its protocol version (CMD_GET_VERSION = 8): the GroovyNLC core answers it without a
+    // session and ignores everything else until CMD_INIT. The original Groovy core is recognised by its
+    // answer to CMD_GET_STATUS (5). Never sent while streaming: the core replies to the last sender.
     void testConnection() {
         if (m_proc.state() != QProcess::NotRunning || m_jf.active()) {
-            m_status->setText("Stop playback first - the MiSTer takes one sender at a time");
+            m_status->setText(running() || m_jf.active()
+                ? "Streaming to the MiSTer right now, so the connection works (Stop first to run the test)"
+                : "Stop playback first - the MiSTer takes one sender at a time");
             return;
         }
-        QUdpSocket sock;
         const QHostAddress addr(m_host->text().trimmed());
         if (addr.isNull()) { m_status->setText("Test: invalid MiSTer IP"); return; }
-        QEventLoop loop;
-        QTimer t;
-        t.setSingleShot(true);
-        connect(&t, &QTimer::timeout, &loop, &QEventLoop::quit);
-        connect(&sock, &QUdpSocket::readyRead, &loop, &QEventLoop::quit);
-        QElapsedTimer el;
-        el.start();
-        sock.writeDatagram(QByteArray(1, 5), addr, 32100);
-        t.start(1000);
-        loop.exec();
-        if (sock.hasPendingDatagrams()) {
-            sock.readDatagram(nullptr, 0);
-            m_status->setText(QString("MiSTer answered in %1 ms - Groovy core is running").arg(el.elapsed()));
-        } else {
-            m_status->setText("No reply from the MiSTer - core not loaded (try \"Launch core\") or wrong IP?");
+        auto ask = [&addr](char cmd, QByteArray* reply) -> qint64 {
+            QUdpSocket sock;
+            QEventLoop loop;
+            QTimer t;
+            t.setSingleShot(true);
+            QObject::connect(&t, &QTimer::timeout, &loop, &QEventLoop::quit);
+            QObject::connect(&sock, &QUdpSocket::readyRead, &loop, &QEventLoop::quit);
+            QElapsedTimer el;
+            el.start();
+            sock.writeDatagram(QByteArray(1, cmd), addr, 32100);
+            t.start(1000);
+            loop.exec();
+            if (!sock.hasPendingDatagrams()) return -1;
+            reply->resize(int(sock.pendingDatagramSize()));
+            sock.readDatagram(reply->data(), reply->size());
+            return el.elapsed();
+        };
+        m_status->setText("Testing…");
+        QCoreApplication::processEvents();
+        QByteArray r;
+        qint64 ms = ask(8, &r);
+        dbg(QString("test connection: version reply %1 ms, %2 bytes").arg(ms).arg(r.size()));
+        if (ms >= 0 && r.size() >= 1 && uchar(r[0]) >= 2) {
+            m_status->setText(QString("GroovyNLC core answered in %1 ms (protocol v%2) - ready").arg(ms).arg(uchar(r[0])));
+            return;
         }
+        r.clear();
+        ms = ask(5, &r);
+        if (ms >= 0)
+            m_status->setText("A Groovy core answered, but not the GroovyNLC core misterMPV needs - choose GroovyNLC "
+                              "and press \"Launch core\"");
+        else
+            m_status->setText("No reply from the MiSTer - core not loaded (try \"Launch core\") or wrong IP?");
     }
 
     // SSH login for "Launch core" / "Test login". From the Setup fields (test before saving) or the stored file.

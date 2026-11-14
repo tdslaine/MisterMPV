@@ -80,7 +80,7 @@ with NLC) and [verbst/RetroArch](https://github.com/verbst/RetroArch) (RetroArch
 ## Installation
 
 ```sh
-git clone git@github.com:tdslaine/MisterMPV.git
+git clone https://github.com/tdslaine/MisterMPV.git
 cd MisterMPV
 
 meson setup build -Dlua=luajit -Dlibmpv=false -Dmanpage-build=disabled -Dtests=false

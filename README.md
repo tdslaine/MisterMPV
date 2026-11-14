@@ -21,12 +21,13 @@ on the TV.
 3. [Installation](#installation)
 4. [First start](#first-start)
 5. [Using the player](#using-the-player)
-6. [Features](#features)
-7. [Screenshots](#screenshots)
-8. [How it works](#how-it-works)
-9. [Repository layout](#repository-layout)
-10. [FAQ](#faq)
-11. [Documentation, credits, license](#documentation-credits-license)
+6. [CRT calibration](#crt-calibration)
+7. [Features](#features)
+8. [Screenshots](#screenshots)
+9. [How it works](#how-it-works)
+10. [Repository layout](#repository-layout)
+11. [FAQ](#faq)
+12. [Documentation, credits, license](#documentation-credits-license)
 
 ## Requirements
 
@@ -184,6 +185,37 @@ the receiver starts with misterMPV and stops when you close it; in Jellyfin choo
 - Subtitle position: the shim itself only knows top / middle / bottom and applies it on every file, so casts use the
   nearest of those.
 
+## CRT calibration
+
+Most CRTs overscan: the edges of the picture sit behind the bezel, and the visible area is often a little off centre.
+The calibration scales and shifts the picture inside the 15 kHz raster so that all of it is visible. The values are
+stored and apply to everything misterMPV plays, including Jellyfin casts.
+
+1. Load any file and start playing it (the pattern replaces the video of a running file).
+2. Open the **Picture** section and press **CRT calibration…**.
+
+   ![Picture section with the CRT calibration button](mister-ui/screenshots/picture.png)
+
+3. Tick **Show calibration pattern**. The CRT now shows a grid with a circle, a white frame at the picture edge and
+   two inner frames for the 95 % (yellow) and 90 % (cyan) safe areas.
+
+   ![Calibration test pattern](mister-ui/screenshots/calibration-pattern.png)
+
+4. Reduce **Width** and **Height** (80-100 %) until the white frame is visible on all four sides, then use
+   **Shift horizontal** (pixels) and **Shift vertical** (lines) to centre it. The circle should look round. In
+   interlaced modes the vertical shift counts field lines.
+
+   ![CRT calibration dialog](mister-ui/screenshots/calibration.png)
+
+5. Close the dialog (the pattern switches off) or untick the box. **Reset** returns to 100 % and no shift.
+
+What this looks like on a set that overscans and sits slightly to the left (simulated from the real test pattern):
+
+![Calibration before and after, simulated CRT view](mister-ui/screenshots/calibration-crt.png)
+
+Subtitles and the OSD are drawn inside the calibrated picture, so they do not end up behind the bezel either. Without the
+window: `--mister-calibrate=yes` shows the pattern, the size and shift options are listed in [MISTER.md](MISTER.md).
+
 ## Features
 
 - Output to the CRT: automatic modeline (25/50 fps to the 50 Hz modes, everything else 60 Hz), TFF/BFF field order,
@@ -211,10 +243,7 @@ the receiver starts with misterMPV and stops when you close it; in Jellyfin choo
 | ![Row menu](mister-ui/screenshots/menu-context.png) ![Sort menu](mister-ui/screenshots/menu-sort.png) | ![Status lamp](mister-ui/screenshots/leds.png) |
 | Right-click menu and sort menu | Status lamp: stopped, starting, playing, paused |
 
-The calibration test pattern as it appears on the CRT (white edge = picture border, yellow and cyan = 95 % and 90 %
-safe areas):
-
-![Calibration test pattern](mister-ui/screenshots/calibration-pattern.png)
+The test pattern and a before/after view are in [CRT calibration](#crt-calibration).
 
 ## How it works
 
@@ -317,12 +346,13 @@ the few hook lines listed under "Repository layout".
 ### License
 
 misterMPV is free software under the GPL. mpv is GPLv2 or later (libmpv LGPLv2.1 or later); the vendored
-`groovy-mister-zig` and the NLC codec are GPL as well. See `LICENSE.GPL`, `LICENSE.LGPL`, `Copyright` and
-`third_party/groovy-mister-zig/LICENSE`.
+`groovy-mister-zig` and the NLC codec (from verbst/Groovy_MiSTer) are GPL-2.0, the vendored `zig-lz4` is MIT. See
+`LICENSE.GPL`, `LICENSE.LGPL`, `Copyright`, `third_party/groovy-mister-zig/LICENSE` and
+`third_party/groovy-mister-zig/zig-pkg/lz4-…/LICENSE`.
 
 ### Credits
 
 Built on mpv, psakhis' Groovy_MiSTer, verbst's GroovyNLC core and NLC codec, iequalshane's MiSTerCast, dylan's
 groovy-mister-zig, idio-sync's MiSTer_GroovyRelay (flicker filter and calibration ideas) and jedisct1's zig-lz4, with
-FFmpeg, libass, LuaJIT, Qt, Zig and yt-dlp. Full list: [CREDITS.md](CREDITS.md). "Winamp" is a trademark of its owner;
+FFmpeg, libass, LuaJIT, Qt, Zig, yt-dlp, and jellyfin-mpv-shim / Jellyfin for the receiver. Full list: [CREDITS.md](CREDITS.md). "Winamp" is a trademark of its owner;
 this project is only inspired by its layout.

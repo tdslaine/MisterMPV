@@ -207,6 +207,7 @@ public:
         for (const QString& f : m_set.value("playlist").toStringList()) addLocal(f);
 
         m_host = new QLineEdit(qEnvironmentVariable("MISTER_HOST", m_set.value("host").toString()));
+        m_host->setPlaceholderText("IP address of the MiSTer");
         m_modeline = new QComboBox;
         m_modeline->addItem("auto (match source)");
         for (const char* k : kModelineKeys) m_modeline->addItem(k);
@@ -1481,6 +1482,7 @@ private:
             m_file->clear();
         }
         if (m_list->count() == 0) return;
+        if (m_host->text().trimmed().isEmpty()) { m_status->setText("Enter the MiSTer IP first"); return; }
         savePlaylist();
         m_set.setValue("host", m_host->text());
         m_set.setValue("modeline", m_modeline->currentText());

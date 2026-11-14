@@ -1,6 +1,7 @@
 // Small Qt front-end for the mpv MiSTer fork: starts mpv with --vo=mister --ao=mister and
 // drives it over mpv's JSON IPC (play/pause, seek, tracks, modeline).
 #include <algorithm>
+#include <unistd.h>
 #include <functional>
 #include <QApplication>
 #include <QCheckBox>
@@ -755,7 +756,7 @@ private:
         const QString scheme = u.scheme();
         static const QStringList kio = {"smb", "sftp", "ftp", "davs", "webdav"};
         if (!kio.contains(scheme)) return loc;
-        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR", "/run/user/1000");
+        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR", QString("/run/user/%1").arg(getuid()));
         QDirIterator it(runtime, {"kio-fuse-*"}, QDir::Dirs | QDir::NoDotAndDotDot);
         while (it.hasNext()) {
             const QString base = it.next() + "/" + scheme;
@@ -783,7 +784,7 @@ private:
     // dir that no longer exists (its name changes with every kio-fuse start) back to their URL first.
     // One resolve per host; the other entries reuse its prefix so a big list is not stat'ed over SMB.
     static QStringList playableLocations(const QStringList& in) {
-        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR", "/run/user/1000");
+        const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR", QString("/run/user/%1").arg(getuid()));
         QHash<QString, QString> prefix;   // "smb://user@host" -> "<kio-fuse dir>/smb/user@host"
         QHash<QString, int> tries;
         QHash<QString, bool> fuseDirOk;

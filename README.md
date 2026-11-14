@@ -68,7 +68,7 @@ first, otherwise the picture stalls.
 ## Prepare the MiSTer: the GroovyNLC core
 
 misterMPV only talks to the **GroovyNLC** core, a fork of psakhis' Groovy core that adds the near-lossless NLC codec (what
-makes 480i/480p stable over Ethernet). The original **Groovy** core ([psakhis/Groovy_MiSTer](https://github.com/psakhis/Groovy_MiSTer))
+makes 480i/480p stable over Ethernet; see [Why NLC?](#why-nlc-and-the-groovynlc-core) in the FAQ). The original **Groovy** core ([psakhis/Groovy_MiSTer](https://github.com/psakhis/Groovy_MiSTer))
 cannot decode NLC. Everything below is summarised from the core's own
 [README](https://github.com/verbst/Groovy_MiSTer#install); check it for newer versions and details.
 
@@ -538,6 +538,26 @@ A video or audio output has to live inside the player, and mpv has no plug-in in
 The repository looks large because it carries mpv's history (about 54,000 commits, about 120 MB once). Our own part is
 roughly 30 files plus the vendored protocol library, and only a few lines inside mpv, so a new mpv is merged with
 `git fetch origin && git merge origin/master`.
+</details>
+
+<details id="why-nlc-and-the-groovynlc-core">
+<summary>Why NLC and the GroovyNLC core?</summary>
+
+Because the 480-line modes are where the bandwidth gets tight. A 640x480 picture at 60 Hz in full colour is about
+442 Mbit/s raw, more than the core can take in (roughly 38 MB/s, about 300 Mbit/s) and a large share of Gigabit
+Ethernet. What decides whether the link holds is not the average but the heaviest single frame: one spike over the
+limit and the picture stalls.
+
+General-purpose compression of the raw pixels helps little on busy pictures and varies a lot from frame to frame. NLC
+was built for exactly this job: it predicts each pixel from its neighbours, codes only the small differences, and is
+decoded directly in the FPGA. In verbst's measurements at 640x480p60 the default level (near 1) needs at most about
+193 Mbit/s on a busy 3D scene, about 24 MB/s and well under the core's limit, with an average 2.4 to 4.1 times smaller
+than raw. Its error is at most ±1 per colour step, which a CRT does not show; level 0 is fully lossless if your network
+has the headroom. 480i (what `auto` picks for most films) sends one field at a time and 240p a quarter of the pixels, so
+those modes need correspondingly less and NLC leaves plenty of headroom there.
+
+That is why misterMPV streams with NLC only and needs the GroovyNLC core. Numbers and method:
+[GroovyNLC README, Bandwidth](https://github.com/verbst/Groovy_MiSTer#bandwidth).
 </details>
 
 <details>

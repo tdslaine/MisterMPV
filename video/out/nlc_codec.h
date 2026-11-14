@@ -1,12 +1,11 @@
-// Vendored from verbst/MiSTerCast (Library/MiSTerCastLib, derived from verbst/Groovy_MiSTer; GPL).
-// Unmodified apart from this line. Must stay bit-exact with the GroovyNLC FPGA decoder.
-// nlc_codec.h — Near-Lossless Codec for Groovy_MiSTer (reference / golden model)
+// Vendored from verbst/Groovy_MiSTer api/nlc_codec.h (commit e60f52a), license:GPL-2.0. Unmodified apart from this line.
+// nlc_codec.h: near-lossless codec for Groovy_MiSTer (reference model)
 //
 // This is the single source of truth for the new deterministic near-lossless
 // video codec that runs alongside LZ4. The same arithmetic is used by:
-//   * the host encoder (api/groovymister.cpp, Phase 2),
-//   * the offline benchmark + golden model (tools/, Phase 0),
-//   * the FPGA decoder spec (rtl/nlc_*.v, Phase 3/5 — must match bit-for-bit).
+//   * the host encoder (api/groovymister.cpp),
+//   * the offline benchmark and reference model (tools/),
+//   * the FPGA decoder (rtl/nlc_*.v), which must match it bit for bit.
 //
 // Pipeline (encode):  RGB -> YCoCg-R (reversible) -> per-plane MED predict ->
 //                     NEAR quantize (closed-loop) -> pack residuals.
@@ -15,7 +14,7 @@
 // WIRE FORMAT v2 (2026-07-02, for the PARALLEL-plane HW decoder): each scanline is
 //   [8-byte header: u16 lenP0..lenP3 (padded byte lengths)]  P0-segment  P1-segment ...
 // where each plane's line data is packed into its OWN 64-bit-WORD-ALIGNED segment and the
-// little-endian u16 lengths give each PADDED segment's byte size — so np hardware bit-readers
+// little-endian u16 lengths give each padded segment's byte size, so np hardware bit-readers
 // can start at their own offsets simultaneously (one line = one self-describing record).
 //
 // Front-ends (the only stage that differs):
@@ -46,10 +45,19 @@ typedef enum {
     NLC_PACK_RICE   = 2,
 } nlc_pack_t;
 
+// Only NLC_RGB888 is usable over the Groovy wire. The FPGA decoder
+// (rtl/nlc_decode_ddr.v) has three plane cores and packs 3 bytes per pixel, with no
+// pixel-format input, and GroovyMister::CmdInit rejects the other two modes. They remain
+// here because nlc_encode/nlc_decode are a self-consistent pair used for offline codec
+// work (tools/nlc_bench).
 typedef enum {
-    NLC_RGB888 = 0,  // 3 bytes/pixel, R,G,B
-    NLC_RGBA   = 1,  // 4 bytes/pixel, R,G,B,A (A coded as a 4th lossless-ish plane)
-    NLC_RGB565 = 2,  // 2 bytes/pixel, expanded to 888 internally
+    NLC_RGB888 = 0,  // 3 bytes/pixel, R,G,B. The only mode the FPGA decoder can consume.
+    NLC_RGBA   = 1,  // 4 bytes/pixel, R,G,B,A (A coded as a 4th plane). Software round-trip
+                     // only: the FPGA reads three segments per line and never consumes the
+                     // alpha one, so a wire session loses framing on line 1. sim/loopback
+                     // decodes in software and will not reproduce that.
+    NLC_RGB565 = 2,  // 2 bytes/pixel. Rejected by both nlc_encode and nlc_decode; there is
+                     // no internal expansion to 888. Use NLC_RGB888 with near_lvl instead.
 } nlc_rgb_t;
 
 typedef enum {

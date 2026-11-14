@@ -1,5 +1,6 @@
 // Shared GroovyNLC (MiSTer FPGA) connection for the mister VO/AO.
-// Frame encoding and the wire format are identical to MiSTerCast's CastEngineGMZ.
+// Frame encoding and the wire format are identical to CastEngineGMZ in our MiSTerCast for Linux
+// (sibling project, same author).
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>

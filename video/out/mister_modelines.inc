@@ -1,5 +1,6 @@
-// 15 kHz NTSC/PAL modes only. Timings from MiSTerCast/Mistglow FrontEnd/modelines.dat
-// (podernixie), 720x240p/720x288p from MiSTer_GroovyRelay; 288p/576i verticals follow PAL.
+// 15 kHz NTSC/PAL modes only. Timing values derived from iequalshane/MiSTerCast
+// FrontEnd/modelines.dat (podernixie's tables), 720x240p/720x288p from MiSTer_GroovyRelay;
+// 288p/576i verticals follow PAL.
 // Interlaced entries carry full-frame vertical timings.
 // NTSC 60 Hz
     { "256x240p60", 4.905, 256, 264, 287, 312, 240, 241, 244, 262, 0 },

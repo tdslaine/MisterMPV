@@ -72,4 +72,4 @@ Qt6, talks to mpv over the JSON IPC socket (`--input-ipc-server`). Settings live
 
 See README. The zig library is built by `meson.build` with `zig build --build-file ... -Doptimize=ReleaseFast`
 when `third_party/groovy-mister-zig/zig-out/lib/libgroovy-mister-zig.a` is missing. `-Dmister-gmz-dir=` points
-elsewhere. License: mpv GPL/LGPL, `nlc_codec` GPL.
+elsewhere. License: mpv GPL/LGPL, `nlc_codec` GPL-2.0 (from verbst/Groovy_MiSTer).

@@ -652,11 +652,6 @@ public:
             menu.exec(m_list->header()->mapToGlobal(p));
         });
         connect(m_list->header(), &QHeaderView::sectionClicked, this, [this](int c) { sortByColumn(c); });
-        connect(m_list, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* it) {
-            const int r = m_list->row(it);
-            if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r});
-            else start(r);
-        });
         connect(m_repeat, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int i) {
             m_set.setValue("repeatMode", i);
             cmd({"set_property", "loop-file", i == 1 ? "inf" : "no"});
@@ -836,7 +831,9 @@ private:
         auto* del = new QShortcut(Qt::Key_Delete, m_list);
         del->setContext(Qt::WidgetShortcut);
         connect(del, &QShortcut::activated, this, [this] { removeSelected(); });
-        connect(m_list, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it) {   // Enter plays
+        // Double-click and Enter both arrive as itemActivated (a double-click also emits itemDoubleClicked,
+        // so connecting both started mpv twice: the second start deleted the first mpv's IPC socket).
+        connect(m_list, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem* it) {
             const int r = m_list->row(it);
             if (running()) cmd(QJsonArray{"set_property", "playlist-pos", r}); else start(r);
         });
@@ -1773,6 +1770,12 @@ private:
     }
 
     void start(int startRow = -1) {
+        // mpv already starting or running (e.g. a second click before the IPC socket is up): never start a
+        // second mpv; it would remove the socket of the running one and leave the window without control.
+        if (m_proc.state() != QProcess::NotRunning) {
+            if (startRow >= 0 && running()) cmd(QJsonArray{"set_property", "playlist-pos", startRow});
+            return;
+        }
         if (m_list->count() == 0 && !m_file->text().trimmed().isEmpty()) {
             addLocal(m_file->text().trimmed());
             m_file->clear();

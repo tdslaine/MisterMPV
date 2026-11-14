@@ -41,7 +41,7 @@ on the TV.
 
 **On the PC** (Linux, same LAN as the MiSTer)
 
-- Build tools: `meson` (1.3 or newer), `ninja`, `zig` (0.15.2 or newer, tested with 0.16), `cmake`, Qt 6 base, a C/C++
+- Build tools: `meson` (1.3 or newer), `ninja`, `zig` 0.15.2 or 0.16 (zig 0.17 cannot build the vendored protocol library yet), `cmake`, Qt 6 base, a C/C++
   compiler, and mpv's usual development libraries (ffmpeg, libass, luajit, ...).
 - At runtime: `ffprobe` for tags and durations, optionally `yt-dlp` for YouTube and `jellyfin-mpv-shim` (3.x) for
   the Jellyfin receiver.

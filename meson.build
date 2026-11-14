@@ -54,7 +54,7 @@ features = {
 
 # generic sources
 # MiSTer (GroovyNLC) output: groovy-mister-zig static library (sources vendored in
-# third_party/groovy-mister-zig, built with zig >= 0.15.2 when the .a is missing).
+# third_party/groovy-mister-zig, built with zig 0.15.2-0.16 when the .a is missing; 0.17 fails).
 gmz_dir = get_option('mister-gmz-dir')
 if gmz_dir == ''
     gmz_dir = meson.project_source_root() / 'third_party/groovy-mister-zig'

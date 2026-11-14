@@ -72,6 +72,13 @@
 #include "jellyfin.h"
 #include "modeline_keys.h"
 
+// MISTERMPV_DEBUG=1: trace start/IPC/process events to stderr (for bug reports).
+static void dbg(const QString& m) {
+    static const bool on = qEnvironmentVariableIsSet("MISTERMPV_DEBUG");
+    if (on) fprintf(stderr, "[misterMPV %s] %s\n", qPrintable(QDateTime::currentDateTime().toString("HH:mm:ss.zzz")),
+                    qPrintable(m));
+}
+
 // Colour themes: Fusion style + a palette, the same on every desktop (and in the AppImage, which has
 // no KDE style). "System" leaves the desktop's own style and colours alone.
 struct Theme {
@@ -706,6 +713,15 @@ public:
         });
         connect(m_aspect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { applyView(); });
         connect(&m_proc, &QProcess::finished, this, [this] { onStopped(); });
+        connect(&m_proc, &QProcess::stateChanged, this, [this](QProcess::ProcessState st) {
+            dbg(QString("mpv process state %1 pid %2 exit %3").arg(int(st)).arg(m_proc.processId()).arg(m_proc.exitCode()));
+        });
+        connect(&m_proc, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
+            dbg(QString("mpv process error %1: %2").arg(int(e)).arg(m_proc.errorString()));
+        });
+        connect(&m_sock, &QLocalSocket::stateChanged, this, [](QLocalSocket::LocalSocketState st) {
+            dbg(QString("ipc socket state %1").arg(int(st)));
+        });
         connect(&m_ssh, &QProcess::finished, this, [this](int code) { onSshFinished(code); });
         connect(&m_ssh, &QProcess::errorOccurred, this, [this](QProcess::ProcessError e) {
             if (e == QProcess::FailedToStart) { m_status->setText("ssh not found - install openssh"); }
@@ -714,7 +730,10 @@ public:
         m_retry.setInterval(150);
         connect(&m_retry, &QTimer::timeout, this, [this] {
             m_sock.connectToServer(m_sockPath);
-            if (m_sock.waitForConnected(50) || ++m_tries > 40) {
+            const bool ok = m_sock.waitForConnected(50);
+            dbg(QString("ipc try %1: %2 state=%3 err=%4 file=%5 proc=%6").arg(m_tries).arg(m_sockPath)
+                .arg(int(m_sock.state())).arg(m_sock.errorString()).arg(QFileInfo::exists(m_sockPath)).arg(int(m_proc.state())));
+            if (ok || ++m_tries > 40) {
                 m_retry.stop();
                 if (m_sock.state() == QLocalSocket::ConnectedState) onConnected();
                 else if (m_proc.state() != QProcess::NotRunning) { setLed(Led::Stopped); m_status->setText("could not reach mpv's control socket"); }
@@ -1770,6 +1789,7 @@ private:
     }
 
     void start(int startRow = -1) {
+        dbg(QString("start(row %1) proc=%2 connected=%3").arg(startRow).arg(int(m_proc.state())).arg(running()));
         // mpv already starting or running (e.g. a second click before the IPC socket is up): never start a
         // second mpv; it would remove the socket of the running one and leave the window without control.
         if (m_proc.state() != QProcess::NotRunning) {
@@ -1810,6 +1830,7 @@ private:
         QStringList files;
         for (int i = 0; i < m_list->count(); i++) files << m_list->item(i)->data(0, Qt::UserRole).toString();
         a << playableLocations(files);
+        dbg("starting " + mpvPath() + " with " + QString::number(a.size()) + " args, socket " + m_sockPath);
         m_proc.start(mpvPath(), a);
         m_status->setText("starting…");
         setLed(Led::Starting);

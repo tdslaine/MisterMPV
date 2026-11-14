@@ -32,6 +32,13 @@ Ubuntu library).
 
 ## Test
 
+Also start it once under a real Wayland compositor; the offscreen test does not load the Wayland plugins. Without a
+second screen: `kwin_wayland --virtual --socket test-wl &` and then
+`WAYLAND_DISPLAY=test-wl QT_QPA_PLATFORM=wayland QT_LOGGING_RULES='qt.qpa.wayland*=true' ./misterMPV-*.AppImage`,
+which must log `Using the 'xdg-shell' shell integration` (v0.2.2's first build lacked the Wayland shell plugins and
+opened no window under Wayland).
+
+
 `test-in.sh <AppImage> <some.mp3> <scratch dir>` checks mpv playback, the `mister` VO, `ffprobe` and that the window
 starts (offscreen). Tested for v0.2.1 on CachyOS, Fedora 45 and Debian 13 containers with a desktop base
 (alsa, mesa EGL/GL, libglvnd OpenGL, xkbcommon, fontconfig, harfbuzz, xcb, dbus).

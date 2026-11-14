@@ -32,6 +32,16 @@ export QMAKE=/usr/lib/qt6/bin/qmake EXTRA_PLATFORM_PLUGINS="libqwayland-generic.
        APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=0 LINUXDEPLOY_OUTPUT_VERSION=$VER
 /work/dl/linuxdeploy-x86_64.AppImage --appdir $A -e $A/usr/bin/misterMPV -e $A/usr/bin/mpv -e $A/usr/bin/ffprobe \
     -l /usr/lib/x86_64-linux-gnu/libfribidi.so.0 -d /work/misterMPV.desktop -i /work/tmp/mistermpv.svg --plugin qt
+# Wayland: linuxdeploy-plugin-qt only takes the platform plugin; without the shell integration (xdg-shell),
+# decorations and wayland-egl, Qt cannot open a window under Wayland. Copy the client-side plugins and let
+# linuxdeploy pull in their libraries.
+QP=/usr/lib/x86_64-linux-gnu/qt6/plugins
+for d in wayland-shell-integration wayland-decoration-client; do mkdir -p $A/usr/plugins/$d; cp $QP/$d/*.so $A/usr/plugins/$d/; done
+mkdir -p $A/usr/plugins/wayland-graphics-integration-client
+cp $QP/wayland-graphics-integration-client/libqt-plugin-wayland-egl.so $A/usr/plugins/wayland-graphics-integration-client/
+WL_DEPS=()
+for f in $A/usr/plugins/wayland-*/*.so; do WL_DEPS+=(--deploy-deps-only "$f"); done
+/work/dl/linuxdeploy-x86_64.AppImage --appdir $A "${WL_DEPS[@]}"
 # Copyright files of every bundled distro library
 for l in $A/usr/lib/*.so*; do
   p=$(dpkg -S "$(basename "$l")" 2>/dev/null | head -1 | cut -d: -f1) || true

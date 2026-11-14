@@ -69,6 +69,7 @@ static void update_fx(struct vo *vo)
     const struct mister_fx_opts *f = p->fx->opts;
     mister_set_fx(cp.brightness * 100.0, (cp.contrast - 1.0) * 100.0,
                   (cp.saturation - 1.0) * 100.0, f->blacklevel, f->scanlines, f->scanstyle);
+    mister_set_sync_shift(f->sync_shift);
     update_geometry(vo);
 }
 
@@ -290,6 +291,8 @@ static int preinit(struct vo *vo)
     p->fmt = p->color_order ? IMGFMT_RGB24 : IMGFMT_BGR24;
     mister_set_rgb_order(p->color_order);
     mister_set_interlace(p->field_order, p->flicker);
+    p->fx = m_config_cache_alloc(p, vo->global, &mister_fx_conf);
+    mister_set_sync_shift(((const struct mister_fx_opts *)p->fx->opts)->sync_shift);   // before connecting
     if (!mister_acquire(p->host, p->modeline, p->near_lvl, &p->info)) {
         MP_ERR(vo, "Could not connect to the MiSTer.\n");
         return -1;
@@ -298,7 +301,6 @@ static int preinit(struct vo *vo)
     if (p->pad)
         mister_pad_start(vo->input_ctx, p->host);
     p->eq = mp_csp_equalizer_create(p, vo->global);
-    p->fx = m_config_cache_alloc(p, vo->global, &mister_fx_conf);
     update_fx(vo);
 
     p->img = mp_image_alloc(p->fmt, p->info.width, p->info.height);

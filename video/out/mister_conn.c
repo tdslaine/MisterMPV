@@ -51,8 +51,11 @@ static struct {
     atomic_int flicker;          // 0 off, 1 light, 2 full
     atomic_int rgb_order;
     atomic_int fx_bri, fx_con, fx_sat, fx_blk, fx_scn, fx_scs;  // levels, x100, x100, levels, percent
+    pthread_mutex_t shift_lock;  // guards shift_spec
+    char shift_spec[1024];       // "key:h:v,key:h:v" sync position fine-tune per modeline
+    atomic_bool shift_dirty;     // re-send the modeline from the sender thread
 } G = { .lock = PTHREAD_MUTEX_INITIALIZER, .gmz_lock = PTHREAD_MUTEX_INITIALIZER,
-        .frame_lock = PTHREAD_MUTEX_INITIALIZER,
+        .frame_lock = PTHREAD_MUTEX_INITIALIZER, .shift_lock = PTHREAD_MUTEX_INITIALIZER,
         .fx_con = 100, .fx_sat = 100 };
 
 #define OPT_BASE_STRUCT struct mister_fx_opts
@@ -66,6 +69,7 @@ const struct m_sub_options mister_fx_conf = {
         {"mister-hoffset", OPT_INT(hoffset), M_RANGE(-72, 72)},
         {"mister-voffset", OPT_INT(voffset), M_RANGE(-28, 28)},
         {"mister-calibrate", OPT_BOOL(calibrate)},
+        {"mister-sync-shift", OPT_STRING(sync_shift)},
         {0}
     },
     .defaults = &(const struct mister_fx_opts){ .hsize = 100, .vsize = 100 },
@@ -150,6 +154,55 @@ static nlc_params nlc_p(int w, int h, int near_lvl)
     return np;
 }
 
+void mister_set_sync_shift(const char *spec)
+{
+    if (!spec) spec = "";
+    pthread_mutex_lock(&G.shift_lock);
+    if (strcmp(spec, G.shift_spec)) {
+        snprintf(G.shift_spec, sizeof(G.shift_spec), "%s", spec);
+        atomic_store(&G.shift_dirty, true);
+    }
+    pthread_mutex_unlock(&G.shift_lock);
+}
+
+// Sync position fine-tune for `key` from "key:h:v,..." (h pixels, v lines; + = picture right/down).
+static void lookup_shift(const char *key, int *dh, int *dv)
+{
+    *dh = *dv = 0;
+    pthread_mutex_lock(&G.shift_lock);
+    const size_t kl = strlen(key);
+    for (const char *e = G.shift_spec; e && *e; e = strchr(e, ',') ? strchr(e, ',') + 1 : NULL) {
+        int h, v;
+        if (!strncmp(e, key, kl) && e[kl] == ':' && sscanf(e + kl + 1, "%d:%d", &h, &v) == 2) {
+            *dh = h; *dv = v;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&G.shift_lock);
+}
+
+static int clampi_(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+// The table modeline with the sync pulse moved by the fine-tune shift. Pulse width, totals and
+// pixel clock stay as they are, so line/field rates do not change; the pulse is kept inside the
+// blanking (same rule as MiSTerCast's modeline nudge). Moving the pulse later moves the picture
+// the other way on the CRT, hence the minus.
+static void fill_gm(const struct ml *m, gmz_modeline_t *gm, int *rdh, int *rdv)
+{
+    int dh, dv;
+    lookup_shift(m->key, &dh, &dv);
+    const int hw = m->he - m->hb, vw = m->ve - m->vb;
+    const int hb = clampi_(m->hb - dh, m->ha + 2, m->ht - hw - 2);
+    const int vb = clampi_(m->vb - dv, m->va + 1, m->vt - vw - 1);
+    memset(gm, 0, sizeof(*gm));
+    gm->pixel_clock = m->pclock;
+    gm->h_active = m->ha; gm->h_begin = hb; gm->h_end = hb + hw; gm->h_total = m->ht;
+    gm->v_active = m->va; gm->v_begin = vb; gm->v_end = vb + vw; gm->v_total = m->vt;
+    gm->interlaced = m->interlace;
+    if (rdh) *rdh = m->hb - hb;
+    if (rdv) *rdv = m->vb - vb;
+}
+
 static bool open_conn(void)
 {
     if (G.conn) { gmz_disconnect(G.conn); G.conn = NULL; }
@@ -160,13 +213,12 @@ static bool open_conn(void)
     }
     const struct ml *m = G.ml;
     gmz_modeline_t gm;
-    memset(&gm, 0, sizeof(gm));
-    gm.pixel_clock = m->pclock;
-    gm.h_active = m->ha; gm.h_begin = m->hb; gm.h_end = m->he; gm.h_total = m->ht;
-    gm.v_active = m->va; gm.v_begin = m->vb; gm.v_end = m->ve; gm.v_total = m->vt;
-    gm.interlaced = m->interlace;
+    int dh, dv;
+    atomic_store(&G.shift_dirty, false);
+    fill_gm(m, &gm, &dh, &dv);
     gmz_set_modeline(G.conn, &gm);
-    fprintf(stderr, "[mister] connected (%s), modeline %s\n", gmz_version(), m->key);
+    fprintf(stderr, "[mister] connected (%s), modeline %s, sync shift %+d px %+d lines\n",
+            gmz_version(), m->key, dh, dv);
     return true;
 }
 
@@ -211,6 +263,15 @@ static void *sender(void *arg)
             continue;
         }
         if (pace != GMZ_PACE_READY) continue;
+        if (atomic_exchange(&G.shift_dirty, false)) {   // live sync position fine-tune
+            gmz_modeline_t gm;
+            int dh, dv;
+            fill_gm(G.ml, &gm, &dh, &dv);
+            pthread_mutex_lock(&G.gmz_lock);
+            gmz_set_modeline(G.conn, &gm);
+            pthread_mutex_unlock(&G.gmz_lock);
+            fprintf(stderr, "[mister] modeline %s, sync shift %+d px %+d lines\n", G.ml->key, dh, dv);
+        }
 
         const uint8_t *src;
         pthread_mutex_lock(&G.frame_lock);

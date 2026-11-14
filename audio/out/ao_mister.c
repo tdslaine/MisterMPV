@@ -15,6 +15,7 @@
 #include "common/common.h"
 #include "common/msg.h"
 #include "options/m_option.h"
+#include "options/m_config.h"
 #include "osdep/timer.h"
 #include "ao.h"
 #include "internal.h"
@@ -52,6 +53,10 @@ static int init(struct ao *ao)
     struct priv *p = ao->priv;
 
     struct mister_info info;
+    // The audio output may connect first: give it the modeline fine-tune as well.
+    struct mister_fx_opts *fx = mp_get_config_group(NULL, ao->global, &mister_fx_conf);
+    mister_set_sync_shift(fx->sync_shift);
+    talloc_free(fx);
     if (!mister_acquire(p->host, p->modeline, p->near_lvl, &info)) {
         MP_ERR(ao, "Could not connect to the MiSTer.\n");
         return -1;

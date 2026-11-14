@@ -34,6 +34,7 @@ that goes out.
 | `--mister-hsize`, `--mister-vsize` | 80-100 | picture size in % of the raster (CRT overscan) |
 | `--mister-hoffset`, `--mister-voffset` | -72..72 / -28..28 | shift in pixels / field lines |
 | `--mister-calibrate` | yes/no | show the calibration test pattern instead of the video |
+| `--mister-sync-shift` | `key:h:v,...` | modeline fine-tune: moves the sync pulse of a modeline so the picture shifts h pixels right / v lines down on the CRT; clamped to the blanking, live |
 
 `--force-window` defaults to `yes` in this fork so the video output (and the gamepad / overlay) also exists
 for audio-only files.
@@ -58,7 +59,7 @@ B5/B6 previous/next, B7 status text on the TV, B9/B10 seek -/+60 s. A button wit
 ## The control window (`mister-ui/`)
 
 Qt6, talks to mpv over the JSON IPC socket (`--input-ipc-server`). Settings live in QSettings
-(`~/.config/mistercast/mpv-mister-ui.conf`), tag cache in `~/.cache/misterMPV/misterMPV-tags2.json`.
+(`~/.config/mistercast/mpv-mister-ui.conf`; SSH login and core paths in `misterMPV-login.conf`, mode 600), tag cache in `~/.cache/misterMPV/misterMPV-tags2.json`.
 
 - *Output*: host, codec, modeline, format (aspect), field order, flicker filter, **Test connection** (UDP status
   request, expects a 13-byte reply), **Launch core** (SSH: `load_core <newest matching .rbf>` into

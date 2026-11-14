@@ -129,10 +129,10 @@ mister-ui/build/misterMPV
 (or start the AppImage)
 
 1. Enter the MiSTer's IP address under **Output → MiSTer** (or set `$MISTER_HOST`).
-2. Check the login in **Setup… → MiSTer login** (see the next section; a stock MiSTer is `root` / `1`), press
+2. Enter the login in **Setup… → MiSTer login** (see the next section; a stock MiSTer is `root` / `1`), press
    **Launch core**, wait a few seconds, then press **Test connection**: it should say *MiSTer answered*.
 3. Add media: **+ File(s)**, **+ Folder**, drag files onto the list, or paste a stream or YouTube URL and press
-   **Add to PL** (details in [Adding media](#adding-media-files-folders-streams-youtube-network-shares)).
+   **+ URL** (details in [Adding media](#adding-media-files-folders-streams-youtube-network-shares)).
 4. Press **Play**, or double-click an entry.
 
 Files can also be given on the command line: `misterMPV film.mkv ~/Videos/Series/` adds them and starts playing.
@@ -153,14 +153,18 @@ MiSTer itself loads cores. Everything it needs is in **Setup… → MiSTer login
 
 | Field | Meaning | Stock MiSTer |
 |---|---|---|
-| SSH host | the MiSTer IP from the main window (**Output → MiSTer**), no separate field | - |
+| SSH host | only if SSH should go to another address; empty = the MiSTer IP from **Output → MiSTer** | empty |
 | SSH user | login name | `root` |
-| SSH password | login password (see the note below) | `1` |
+| SSH password | login password; leave it empty if you log in with a key | `1` |
+| SSH key file | optional private key, e.g. `~/.ssh/id_ed25519` | empty |
 | SSH port | SSH port | `22` |
 | GroovyNLC core | path or wildcard of the core file on the MiSTer; the newest match is loaded | `/media/fat/_Utility/GroovyNLC_*.rbf` |
 | Groovy core (original) | the same for psakhis' original Groovy core | `/media/fat/_Utility/Groovy_*.rbf` |
 
-The fields start with the stock values, **Defaults** puts them back, **Save** stores them. The selector next to
+The login fields start empty: misterMPV has no built-in user name or password, the grey text only shows what a stock
+MiSTer uses. The core paths fall back to the stock paths shown in grey when they are empty. **Test login** logs in with
+the values as they are in the dialog and shows which core files **Launch core** would load (or that none matches).
+**Defaults** empties the fields, **Save** stores them. The selector next to
 **Launch core** in the main window decides which of the two cores is loaded. Use *GroovyNLC* for misterMPV; the
 original core is only there so you can switch the MiSTer back to it for other programs (misterMPV cannot stream to it).
 If the core file is in another folder, enter that path, for example `/media/fat/_Utility/GroovyNLC_20260712.rbf` or
@@ -168,12 +172,15 @@ If the core file is in another folder, enter that path, for example `/media/fat/
 
 **Test connection** sends one UDP packet to port 32100 and reports whether the core answers. It needs no SSH.
 
-**Where the login is stored, and keys.** The settings, the SSH password included, are stored unencrypted in
-`~/.config/mistercast/mpv-mister-ui.conf` on your PC. They are never part of the repository or a release. Make the file
-readable only for you with `chmod 600 ~/.config/mistercast/mpv-mister-ui.conf`. misterMPV runs the normal `ssh` program,
-so a key you have set up for the MiSTer (or a running `ssh-agent`) is tried first; the password is only used if the
-MiSTer asks for one, and with a key it can stay empty. The password is handed to `ssh` through a short-lived helper
-script, never on the command line. misterMPV does not check the MiSTer's SSH host key, so use it only in your own LAN.
+**Where the login is stored, keys and host key.** The login and the core paths are stored only on your PC, in
+`~/.config/mistercast/misterMPV-login.conf`, which misterMPV keeps readable only by you (`chmod 600`). The password is
+stored there as plain text, so prefer a key if you can. Older versions kept the login in the general settings file;
+misterMPV moves it over on the first start. Nothing of it is part of the repository or a release.
+misterMPV runs the normal `ssh` program: with an empty password it only uses keys (the key file from Setup, or your
+default keys and a running `ssh-agent`) and never waits for a prompt; with a password, keys are still tried first.
+The password is handed to `ssh` through a short-lived helper script, never on the command line. The MiSTer's host key
+is remembered on the first login in `~/.config/mistercast/misterMPV-known_hosts`. If it changes later (new SD card,
+reinstall), the login is refused with a hint; delete that file if the change is expected.
 
 ## Adding media: files, folders, streams, YouTube, network shares
 
@@ -184,7 +191,8 @@ script, never on the command line. misterMPV does not check the MiSTer's SSH hos
 | **+ File(s)** | pick one or more files |
 | **+ Folder** | adds every video and audio file in the folder and its subfolders, sorted by name (up to 5000 files) |
 | drag and drop | drop files or folders from a file manager onto the list |
-| URL box + **Add to PL** (or Enter) | a stream URL, a YouTube link, a local path or a network share URL |
+| URL box + **+ URL** (or Enter) | a stream URL, a YouTube link, an `smb://` address or a local path (a folder is scanned like **+ Folder**) |
+| **+ Network share…** | asks for an `smb://` address of a folder or file and mounts it through kio-fuse |
 | command line | `misterMPV film.mkv ~/Videos/Series/` |
 
 Recognised file types: `mkv mp4 avi mov webm mpg mpeg ts m2ts wmv flv m4v ogv vob` (video) and
@@ -192,11 +200,11 @@ Recognised file types: `mkv mp4 avi mov webm mpg mpeg ts m2ts wmv flv m4v ogv vo
 time, read in the background with `ffprobe`.
 
 **Streams.** Paste the URL, for example `https://example.com/live/channel.m3u8` (HLS) or a direct `http(s)://` link to a
-video file, into the URL box and press **Add to PL**.
+video file, into the URL box and press **+ URL**.
 
 **YouTube** (and the other sites `yt-dlp` knows). Paste the video or playlist link the same way. mpv hands it to
 [yt-dlp](https://github.com/yt-dlp/yt-dlp), which therefore has to be installed and on the `PATH`; check with
-`yt-dlp --version`. Without yt-dlp mpv cannot open such an entry and skips to the next one. YouTube changes
+`yt-dlp --version`. Without yt-dlp misterMPV does not add the link and says how to install yt-dlp. YouTube changes
 often, so keep yt-dlp current (distribution package, `pipx upgrade yt-dlp` or `yt-dlp -U`). Picture quality is no
 problem: everything is scaled down to the CRT mode anyway.
 
@@ -204,16 +212,19 @@ problem: everything is scaled down to the CRT mode anyway.
 [kio-fuse](https://invent.kde.org/system/kio-fuse) installed (`kio-fuse` package), misterMPV turns network URLs into
 local paths:
 
-- In **+ File(s)** / **+ Folder**, open *Network* (or type `smb://server/share` into the path bar) and pick files or a
-  folder; or
-- paste a URL such as `smb://server/Videos/Films/film.mkv` into the URL box.
+- press **+ Network share…** and enter the address of a folder or a file, for example `smb://server/Videos/Films`
+  (a folder is added with all its videos, like **+ Folder**); or
+- paste such an address into the URL box and press **+ URL**; or
+- on KDE, open *Network* in **+ File(s)** / **+ Folder** (or type `smb://server/share` into the path bar).
+
+If kio-fuse is missing, **+ Network share…** says so and points to the alternative below.
 
 misterMPV asks kio-fuse (over D-Bus) to mount the share and plays it from there; after a reboot it mounts it again
 by itself. The share's user name and password are asked for and kept by KDE (KWallet), not by misterMPV, so there is
-nothing to put in a config file. `smb://user@server/share` selects the user; never put a password into the URL, because
-playlist entries are saved as plain text.
+nothing to put in a config file. `smb://user@server/share` selects the user. An address with a password in it is
+refused, because playlist entries are saved as plain text.
 
-Without KDE, and in the AppImage, whose file dialog cannot browse `smb://`, mount the share with the usual tools and
+Without kio-fuse (it is part of KDE), mount the share with the usual tools and
 add the mounted folder with **+ Folder**. For example with GNOME/GVfs: `gio mount smb://server/Videos`, then the folder
 `/run/user/$(id -u)/gvfs/smb-share:server=server,share=videos`. Or with a CIFS mount in `/etc/fstab` whose password
 lives in a separate credentials file that only root can read:
@@ -364,7 +375,7 @@ scripts in `~/.config/mpv/scripts` load as usual. With the AppImage, unpack it o
 
 ## CRT geometry and calibration
 
-What fills the screen is decided in three places:
+What fills the screen is decided in four places:
 
 - **Modeline** (**Output → Modeline**): the 15 kHz mode the CRT receives. `auto` picks 240p/480i at 60 Hz or
   288p/576i at 50 Hz from the source's frame rate and height; a fixed mode can be chosen as well
@@ -373,6 +384,10 @@ What fills the screen is decided in three places:
   fixed 4:3 / 16:9 / 21:9).
 - **CRT calibration**: size and position inside the raster, so that nothing disappears behind the bezel. This is
   stored and applies to every mode, to local playback and to Jellyfin casts alike.
+- **Modeline fine-tune** (in the same dialog): moves the sync pulse of one modeline, which shifts the whole picture on
+  the CRT without scaling it or losing pixels. Stored per modeline.
+
+The calibration dialog opens from **Picture → CRT calibration…** and from **Setup… → Picture on the CRT → CRT geometry…**.
 
 Most CRTs overscan: the edges of the picture sit behind the bezel, and the visible area is often a little off centre.
 The calibration scales and shifts the picture inside the 15 kHz raster so that all of it is visible. The values are
@@ -395,6 +410,15 @@ stored and apply to everything misterMPV plays, including Jellyfin casts.
    ![CRT calibration dialog](mister-ui/screenshots/calibration.png)
 
 5. Close the dialog (the pattern switches off) or untick the box. **Reset** returns to 100 % and no shift.
+
+**Modeline fine-tune.** If the picture sits off centre on your set in one particular mode, move that mode itself
+instead of shrinking the picture: choose the modeline in the lower part of the dialog and set **Horizontal** (pixels,
++ = right) and **Vertical** (lines, + = down). The change is applied live, so do it with the test pattern on and a file
+in that mode playing. misterMPV keeps the sync inside the blanking interval, so the line and frame rates never change
+and the values stop where the mode has no more room. With **Modeline = auto**, misterMPV uses 640x480i60 for most
+films and series (320x240p60 for sources up to 240 lines), and 720x576i50 / 320x288p50 for 25/50 fps (PAL) sources;
+adjust those you actually use. **Reset this modeline** returns it to the
+stock timing. Without the window: `--mister-sync-shift=720x480i60:2:-1,320x240p60:0:1`.
 
 What this looks like on a set that overscans and sits slightly to the left (simulated from the real test pattern):
 

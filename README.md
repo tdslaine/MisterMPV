@@ -295,6 +295,18 @@ lamp keeps its colours, because they mean something.
 A button without a function flashes `Pad button 0x....` on the TV, which makes it easy to extend the mapping
 (`video/out/mister_pad.c`).
 
+If the pad does nothing, check both ends:
+
+- **On the MiSTer**, in the GroovyNLC core's OSD (open it with the OSD button or F12 while the core runs):
+  **Joysticks** must be *Digital* or *Analog*, not *Off*. *Analog* is the default on a fresh install. If you came from the
+  original Groovy core and the pad is ignored, the core's settings may not have carried over; see the core's
+  [troubleshooting notes](https://github.com/verbst/Groovy_MiSTer#troubleshooting).
+- misterMPV reads **player 1** only. If several pads are connected, use *OSD → Controllers → Reassign players* and press
+  a button on the pad you want first. The buttons above are the core's standard positions; a remapped profile on the
+  Controllers page moves them accordingly.
+- **In misterMPV**, **Setup… → Control → Gamepad** must be ticked. The pad works only while misterMPV is streaming
+  (the core sends pad input to the program connected to it), and only one program can be connected at a time.
+
 **Jellyfin receiver (casting and SyncPlay).** With `jellyfin-mpv-shim` installed, misterMPV can show up in Jellyfin
 as a cast target, also for watching together with SyncPlay. In **Setup… → Jellyfin receiver** tick *Receive casts*,
 pick a device name (default `MiSTer`), check the server address (taken from your normal shim if you have one) and

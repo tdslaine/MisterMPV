@@ -50,6 +50,7 @@
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QPalette>
+#include <QIcon>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QHash>
@@ -2240,6 +2241,8 @@ private:
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    QApplication::setWindowIcon(QIcon(":/mistermpv.png"));
+    QGuiApplication::setDesktopFileName("misterMPV");   // Wayland: match the window to misterMPV.desktop and its icon
     Window w;
     w.show();
     const QStringList args = app.arguments().mid(1);

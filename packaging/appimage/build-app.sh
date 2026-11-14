@@ -26,7 +26,7 @@ cp $S/third_party/groovy-mister-zig/LICENSE $A/usr/share/doc/misterMPV/LICENSE-g
 cp $S/third_party/groovy-mister-zig/zig-pkg/lz4-*/LICENSE $A/usr/share/doc/misterMPV/LICENSE-zig-lz4
 cp /work/tmp/ffmpeg-7.1.2/COPYING.LGPLv2.1 $A/usr/share/doc/misterMPV/LICENSE-ffmpeg-LGPL-2.1
 cp /work/dl/libplacebo/LICENSE $A/usr/share/doc/misterMPV/LICENSE-libplacebo
-cp $S/etc/mpv.svg /work/tmp/mistermpv.svg
+cp $S/mister-ui/icons/mistermpv.svg /work/tmp/mistermpv.svg
 cd $B; export PATH=/work/dl:$PATH
 export QMAKE=/usr/lib/qt6/bin/qmake EXTRA_PLATFORM_PLUGINS="libqwayland-generic.so;libqoffscreen.so" \
        APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=0 LINUXDEPLOY_OUTPUT_VERSION=$VER

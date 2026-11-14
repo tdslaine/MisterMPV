@@ -1,3 +1,5 @@
+<img src="mister-ui/icons/mistermpv.svg" width="96" align="right" alt="misterMPV icon">
+
 # misterMPV
 
 A video player for the CRT on your MiSTer: films, series, YouTube, live streams and music, played by

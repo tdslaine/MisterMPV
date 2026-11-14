@@ -47,6 +47,8 @@ which license**. If something here is wrong or missing, please open an issue.
 
 ## Written by us
 
+The icon (`mister-ui/icons/mistermpv.svg`, a CRT with a play button) is our own drawing and part of misterMPV under its license.
+
 `vo_mister`, `ao_mister`, the shared sender thread with field splitting / flicker filter / picture effects,
 CRT calibration and test pattern, the gamepad bridge, the Lua scripts (shuffle, visualizers, artist/title overlay),
 the whole `mister-ui` window, and the build integration.

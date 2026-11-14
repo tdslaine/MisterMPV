@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="mistermpv.png">mistermpv-256.png</file>
+  </qresource>
+</RCC>

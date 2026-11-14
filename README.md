@@ -79,6 +79,14 @@ with NLC) and [verbst/RetroArch](https://github.com/verbst/RetroArch) (RetroArch
 
 ## Installation
 
+**Ready-made:** the [releases](https://github.com/tdslaine/MisterMPV/releases) have an **AppImage** for x86_64 Linux
+(built on Ubuntu 22.04, runs on most current distributions) and a tarball for Arch/CachyOS. For the AppImage:
+`chmod +x misterMPV-*-x86_64.AppImage` and start it. It contains the player, the window and `ffprobe`; `yt-dlp`,
+`kio-fuse` and `jellyfin-mpv-shim` are optional and come from your distribution. How it is built:
+[packaging/appimage](packaging/appimage/README.md).
+
+**From source:**
+
 ```sh
 git clone https://github.com/tdslaine/MisterMPV.git
 cd MisterMPV
@@ -280,6 +288,7 @@ The fork changes only a few lines of mpv; everything else is new files.
 | `player/lua/mister_playlist.lua`, `mister_visualizer.lua` | shuffle, next/previous, visualizer, overlay |
 | `mister-ui/` | the Qt window and its screenshots |
 | `third_party/groovy-mister-zig/` | MiSTer protocol library (Zig) |
+| `packaging/appimage/` | AppImage build (container, scripts, tests) |
 | hooks into mpv | `video/out/vo.c`, `audio/out/ao.c`, `options/options.c/.h`, `player/core.h`, `player/lua.c`, `player/scripting.c`, `meson.build` |
 
 ## FAQ

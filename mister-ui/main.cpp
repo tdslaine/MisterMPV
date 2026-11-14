@@ -84,6 +84,7 @@ static void dbg(const QString& m) {
 struct Theme {
     const char* name;
     const char *window, *base, *altBase, *text, *button, *highlight, *highlightText, *link, *mid, *disabled;
+    const char* baseText = nullptr;   // text in lists/inputs if it differs from the window text
 };
 static const Theme kThemes[] = {
     {"System", nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
@@ -95,6 +96,9 @@ static const Theme kThemes[] = {
     {"Solarized Dark", "#002b36", "#073642", "#0a3f4c", "#93a1a1", "#073642", "#268bd2", "#fdf6e3", "#2aa198", "#586e75", "#657b83"},
     {"Catppuccin Mocha", "#1e1e2e", "#181825", "#24243a", "#cdd6f4", "#313244", "#cba6f7", "#1e1e2e", "#89b4fa", "#45475a", "#6c7086"},
     {"Tokyo Night", "#1a1b26", "#16161e", "#202230", "#c0caf5", "#24283b", "#7aa2f7", "#1a1b26", "#7dcfff", "#414868", "#565f89"},
+    // In the style of the classic Winamp 2 base skin: slate chrome, black playlist with green text, blue selection.
+    {"Classic Amp", "#2b2b3d", "#000000", "#0a0a0a", "#d6d6e6", "#3c3c55", "#0000c6", "#ffffff", "#00e000", "#5a5a78",
+     "#77778f", "#00e000"},
 };
 static void applyTheme(const QString& name) {
     static const QString sysStyle = QApplication::style()->name();   // captured on the first call
@@ -114,7 +118,7 @@ static void applyTheme(const QString& name) {
     p.setColor(QPalette::WindowText, text);
     p.setColor(QPalette::Base, base);
     p.setColor(QPalette::AlternateBase, alt);
-    p.setColor(QPalette::Text, text);
+    p.setColor(QPalette::Text, t->baseText ? QColor(t->baseText) : text);
     p.setColor(QPalette::Button, btn);
     p.setColor(QPalette::ButtonText, text);
     p.setColor(QPalette::ToolTipBase, btn);

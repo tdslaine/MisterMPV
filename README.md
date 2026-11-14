@@ -263,11 +263,12 @@ for your set's overscan, with a test pattern). **Setup…** holds the rarely cha
 colour, "subtitles in the black bars", artist/title overlay for music, colour order, gamepad on/off, SSH login.
 
 **Themes.** **Setup… → Display → Theme** changes the window's colours at once: *System* (your desktop's style, the
-default), *Light*, *Dark*, *Nord*, *Gruvbox Dark*, *Dracula*, *Solarized Dark*, *Catppuccin Mocha* and *Tokyo Night*.
+default), *Light*, *Dark*, *Nord*, *Gruvbox Dark*, *Dracula*, *Solarized Dark*, *Catppuccin Mocha*, *Tokyo Night* and
+*Classic Amp*, a nod to Winamp 2's classic base skin (slate frame, black playlist with green text).
 Apart from *System* they use Qt's Fusion style, so they look the same on every desktop and in the AppImage. The status
 lamp keeps its colours, because they mean something.
 
-![The nine themes](mister-ui/screenshots/themes.png)
+![The ten themes](mister-ui/screenshots/themes.png)
 
 **Keyboard**
 
@@ -466,7 +467,8 @@ window: `--mister-calibrate=yes` shows the pattern, the size and shift options a
 - Subtitles: size, position, colour, placement in the black bars of letterboxed films.
 - Jellyfin receiver: cast target and SyncPlay through a private jellyfin-mpv-shim instance, same picture settings.
 - Convenience: status lamp, remembered window size, keyboard shortcuts, *Launch core*, *Test login* and
-  *Test connection*, nine colour themes (Light, Dark, Nord, Gruvbox, Dracula, Solarized, Catppuccin, Tokyo Night).
+  *Test connection*, ten colour themes (Light, Dark, Nord, Gruvbox, Dracula, Solarized, Catppuccin, Tokyo Night and a
+  classic Winamp-style one).
 
 ## Screenshots
 

@@ -1,7 +1,8 @@
 # misterMPV
 
-A media player for the CRT on your MiSTer: [mpv](https://mpv.io) with a video and audio output that streams to a
-MiSTer FPGA running the [GroovyNLC core](https://github.com/verbst/Groovy_MiSTer), plus a Winamp-style control window.
+A video player for the CRT on your MiSTer: films, series, YouTube, live streams and music, played by
+[mpv](https://mpv.io) with a video and audio output that streams to a MiSTer FPGA running the
+[GroovyNLC core](https://github.com/verbst/Groovy_MiSTer), plus a control window with a playlist.
 
 [![mpv 0.41](https://img.shields.io/badge/based%20on-mpv%200.41-8a2be2)](https://mpv.io)
 [![GroovyNLC core](https://img.shields.io/badge/MiSTer-GroovyNLC%20core-2ea44f)](https://github.com/verbst/Groovy_MiSTer)
@@ -10,9 +11,10 @@ MiSTer FPGA running the [GroovyNLC core](https://github.com/verbst/Groovy_MiSTer
 
 ![misterMPV main window](mister-ui/screenshots/main.png)
 
-Every video frame is compressed with the GroovyNLC codec and sent over UDP to the MiSTer at the CRT's own timing
-(240p, 288p, 480i, 576i); audio is sent as 48 kHz PCM. The MiSTer's gamepad controls the player and shows status text
-on the TV.
+Every video frame is scaled to a real 15 kHz mode (240p, 288p, 480i, 576i), compressed with the NLC codec and sent over
+UDP to the MiSTer at the CRT's own timing; audio is sent as 48 kHz PCM. Local files, folders, network shares, stream URLs
+and YouTube links go into one playlist. Subtitles, audio tracks and the rest of mpv come along. The MiSTer's gamepad
+controls the player and shows status text on the TV.
 
 ## Contents
 
@@ -20,14 +22,17 @@ on the TV.
 2. [Prepare the MiSTer: the GroovyNLC core](#prepare-the-mister-the-groovynlc-core)
 3. [Installation](#installation)
 4. [First start](#first-start)
-5. [Using the player](#using-the-player)
-6. [CRT calibration](#crt-calibration)
-7. [Features](#features)
-8. [Screenshots](#screenshots)
-9. [How it works](#how-it-works)
-10. [Repository layout](#repository-layout)
-11. [FAQ](#faq)
-12. [Documentation, credits, license](#documentation-credits-license)
+5. [Setup: MiSTer login and Launch core](#setup-mister-login-and-launch-core)
+6. [Adding media: files, folders, streams, YouTube, network shares](#adding-media-files-folders-streams-youtube-network-shares)
+7. [Using the player](#using-the-player)
+8. [Subtitles, audio tracks and other mpv features](#subtitles-audio-tracks-and-other-mpv-features)
+9. [CRT geometry and calibration](#crt-geometry-and-calibration)
+10. [Features](#features)
+11. [Screenshots](#screenshots)
+12. [How it works](#how-it-works)
+13. [Repository layout](#repository-layout)
+14. [FAQ](#faq)
+15. [Documentation, credits, license](#documentation-credits-license)
 
 ## Requirements
 
@@ -110,19 +115,107 @@ binaries into one folder.
 mister-ui/build/misterMPV
 ```
 
-1. Enter the MiSTer's IP address under **Output → MiSTer** (or set `$MISTER_HOST`).
-2. If the core is not running, press **Launch core** (uses SSH; the login is in **Setup…**, a stock MiSTer is
-   `root` / `1`), wait a few seconds, then press **Test connection**.
-3. Add media: **+ File(s)**, **+ Folder**, drag files onto the list, or paste a YouTube/stream URL and press
-   **Add to PL**.
-4. Press **Play**.
+(or start the AppImage)
 
-Files can also be given on the command line: `misterMPV song.mp3 ~/Music/Album/` adds them and starts playing.
+1. Enter the MiSTer's IP address under **Output → MiSTer** (or set `$MISTER_HOST`).
+2. Check the login in **Setup… → MiSTer login** (see the next section; a stock MiSTer is `root` / `1`), press
+   **Launch core**, wait a few seconds, then press **Test connection**: it should say *MiSTer answered*.
+3. Add media: **+ File(s)**, **+ Folder**, drag files onto the list, or paste a stream or YouTube URL and press
+   **Add to PL** (details in [Adding media](#adding-media-files-folders-streams-youtube-network-shares)).
+4. Press **Play**, or double-click an entry.
+
+Files can also be given on the command line: `misterMPV film.mkv ~/Videos/Series/` adds them and starts playing.
 
 Without the window, the player alone works as well:
 
 ```sh
 build/mpv --vo=mister --ao=mister --vo-mister-host=<MiSTer IP> --vo-mister-modeline=auto movie.mkv
+```
+
+## Setup: MiSTer login and Launch core
+
+![Setup dialog](mister-ui/screenshots/setup.png)
+
+**Launch core** starts the GroovyNLC core on the MiSTer without touching the MiSTer menu. It logs in with SSH,
+picks the newest file that matches the core path and writes `load_core <file>` to `/dev/MiSTer_cmd`, which is how the
+MiSTer itself loads cores. Everything it needs is in **Setup… → MiSTer login (for "Launch core")**:
+
+| Field | Meaning | Stock MiSTer |
+|---|---|---|
+| SSH host | the MiSTer IP from the main window (**Output → MiSTer**), no separate field | - |
+| SSH user | login name | `root` |
+| SSH password | login password (see the note below) | `1` |
+| SSH port | SSH port | `22` |
+| GroovyNLC core | path or wildcard of the core file on the MiSTer; the newest match is loaded | `/media/fat/_Utility/GroovyNLC_*.rbf` |
+| Groovy core (original) | the same for psakhis' original Groovy core | `/media/fat/_Utility/Groovy_*.rbf` |
+
+The fields start with the stock values, **Defaults** puts them back, **Save** stores them. The selector next to
+**Launch core** in the main window decides which of the two cores is loaded. Use *GroovyNLC* for misterMPV; the
+original core is only there so you can switch the MiSTer back to it for other programs (misterMPV cannot stream to it).
+If the core file is in another folder, enter that path, for example `/media/fat/_Utility/GroovyNLC_20260712.rbf` or
+`/media/fat/cores/GroovyNLC_*.rbf`. If no file matches, the status line says so.
+
+**Test connection** sends one UDP packet to port 32100 and reports whether the core answers. It needs no SSH.
+
+**Where the login is stored, and keys.** The settings, the SSH password included, are stored unencrypted in
+`~/.config/mistercast/mpv-mister-ui.conf` on your PC. They are never part of the repository or a release. Make the file
+readable only for you with `chmod 600 ~/.config/mistercast/mpv-mister-ui.conf`. misterMPV runs the normal `ssh` program,
+so a key you have set up for the MiSTer (or a running `ssh-agent`) is tried first; the password is only used if the
+MiSTer asks for one, and with a key it can stay empty. The password is handed to `ssh` through a short-lived helper
+script, never on the command line. misterMPV does not check the MiSTer's SSH host key, so use it only in your own LAN.
+
+## Adding media: files, folders, streams, YouTube, network shares
+
+![Playlist with films, a series and a stream](mister-ui/screenshots/main.png)
+
+| How | What happens |
+|---|---|
+| **+ File(s)** | pick one or more files |
+| **+ Folder** | adds every video and audio file in the folder and its subfolders, sorted by name (up to 5000 files) |
+| drag and drop | drop files or folders from a file manager onto the list |
+| URL box + **Add to PL** (or Enter) | a stream URL, a YouTube link, a local path or a network share URL |
+| command line | `misterMPV film.mkv ~/Videos/Series/` |
+
+Recognised file types: `mkv mp4 avi mov webm mpg mpeg ts m2ts wmv flv m4v ogv vob` (video) and
+`mp3 flac ogg opus wav m4a aac wma ape mka` (audio). The table shows the title tag (or the file name) and the running
+time, read in the background with `ffprobe`.
+
+**Streams.** Paste the URL, for example `https://example.com/live/channel.m3u8` (HLS) or a direct `http(s)://` link to a
+video file, into the URL box and press **Add to PL**.
+
+**YouTube** (and the other sites `yt-dlp` knows). Paste the video or playlist link the same way. mpv hands it to
+[yt-dlp](https://github.com/yt-dlp/yt-dlp), which therefore has to be installed and on the `PATH`; check with
+`yt-dlp --version`. Without yt-dlp mpv cannot open such an entry and skips to the next one. YouTube changes
+often, so keep yt-dlp current (distribution package, `pipx upgrade yt-dlp` or `yt-dlp -U`). Picture quality is no
+problem: everything is scaled down to the CRT mode anyway.
+
+**Network shares (SMB) with kio-fuse.** mpv cannot open `smb://` itself. On KDE with
+[kio-fuse](https://invent.kde.org/system/kio-fuse) installed (`kio-fuse` package), misterMPV turns network URLs into
+local paths:
+
+- In **+ File(s)** / **+ Folder**, open *Network* (or type `smb://server/share` into the path bar) and pick files or a
+  folder; or
+- paste a URL such as `smb://server/Videos/Films/film.mkv` into the URL box.
+
+misterMPV asks kio-fuse (over D-Bus) to mount the share and plays it from there; after a reboot it mounts it again
+by itself. The share's user name and password are asked for and kept by KDE (KWallet), not by misterMPV, so there is
+nothing to put in a config file. `smb://user@server/share` selects the user; never put a password into the URL, because
+playlist entries are saved as plain text.
+
+Without KDE, and in the AppImage, whose file dialog cannot browse `smb://`, mount the share with the usual tools and
+add the mounted folder with **+ Folder**. For example with GNOME/GVfs: `gio mount smb://server/Videos`, then the folder
+`/run/user/$(id -u)/gvfs/smb-share:server=server,share=videos`. Or with a CIFS mount in `/etc/fstab` whose password
+lives in a separate credentials file that only root can read:
+
+```
+# /etc/fstab
+//server/Videos  /mnt/videos  cifs  credentials=/etc/samba/videos.cred,uid=1000,gid=1000,ro,noauto,x-systemd.automount  0 0
+```
+
+```
+# /etc/samba/videos.cred   (chmod 600, owner root)
+username=<user>
+password=<password>
 ```
 
 ## Using the player
@@ -136,7 +229,9 @@ Right-click a row for *Play now*, *Play next*, *Move to end*, *Remove*, *Open co
 `Sort` has artist, title, album, time, folder, date, reverse and random. `Repeat` is off / one / all; `Shuffle` picks
 the next track randomly but keeps the list order.
 
-**Output and picture.** Modeline (`auto` follows the source), field order, flicker filter, aspect. In the collapsible
+**Output and picture.** Modeline (`auto` follows the source), field order, flicker filter, aspect, and the
+**Codec**: *lossless* (NLC near 0) or *near 1* to *near 3*. Higher levels need less bandwidth and lose a little fine
+detail; *near 1* is the default and a good choice on Gigabit Ethernet. In the collapsible
 *Audio / Subtitles* and *Picture* sections: track selection, subtitle size and position, visualizer for music;
 brightness, contrast, saturation, black level, scanlines (four styles) and **CRT calibration** (picture size and shift
 for your set's overscan, with a test pattern). **Setup…** holds the rarely changed options: OSD text size, subtitle
@@ -193,7 +288,80 @@ the receiver starts with misterMPV and stops when you close it; in Jellyfin choo
 - Subtitle position: the shim itself only knows top / middle / bottom and applies it on every file, so casts use the
   nearest of those.
 
-## CRT calibration
+## Subtitles, audio tracks and other mpv features
+
+misterMPV is mpv, so mpv's playback features work. Which of them you reach depends on how you start it.
+
+**In the window** (checked with v0.2.1):
+
+| Feature | Where |
+|---|---|
+| audio track | **Audio / Subtitles → Audio** while playing (MiSTer gamepad: B3) |
+| subtitle track, off | **Audio / Subtitles → Subtitles** (gamepad: B4) |
+| subtitle size and position | **Audio / Subtitles**, sliders |
+| subtitle colour, subtitles in the black bars of letterboxed films | **Setup… → Display** |
+| external subtitles | a `.srt`/`.ass` file next to the video with the same name (or the name plus a language, e.g. `film.en.srt`) is loaded automatically |
+| seek, speed, volume, pause | transport row, seek bar, keyboard shortcuts above, gamepad |
+| aspect: auto, stretch, zoom, 4:3, 16:9, 21:9 | **Output → Format** |
+| Jellyfin casting and SyncPlay | **Setup… → Jellyfin receiver** (see above) |
+
+The window starts mpv with `--no-config`, so your own `mpv.conf`, `input.conf` and scripts do not apply there, and
+mpv's own hotkeys do not reach it (there is no mpv window to type into); use the window's shortcuts and the gamepad.
+
+**mpv started directly** from a terminal gives you all of mpv, with its own keys. Example:
+
+```sh
+mpv --vo=mister --ao=mister --vo-mister-host=<MiSTer IP> --ao-mister-host=<MiSTer IP> --vo-mister-modeline=auto film.mkv
+```
+
+Or put it into a profile in `~/.config/mpv/mpv.conf` and run `mpv --profile=mister film.mkv`:
+
+```ini
+[mister]
+vo=mister
+ao=mister
+vo-mister-host=<MiSTer IP>
+ao-mister-host=<MiSTer IP>
+vo-mister-modeline=auto
+sub-auto=fuzzy
+```
+
+Keys that were checked in this build (mpv's defaults):
+
+| Key | Action |
+|---|---|
+| `Space` / `p` | pause |
+| `Left` / `Right`, `Down` / `Up` | seek back / forward (short, 1 minute) |
+| `PgUp` / `PgDn` | next / previous chapter |
+| `[` / `]`, `Backspace` | slower / faster, normal speed |
+| `#` | next audio track |
+| `j` / `J` | next / previous subtitle track |
+| `v` | subtitles on / off |
+| `z` / `Z` (or `x`) | subtitle delay -0.1 s / +0.1 s |
+| `Ctrl` + `+` / `Ctrl` + `-` | audio delay +0.1 s / -0.1 s |
+| `r` / `R` | subtitles up / down |
+| `F` / `G` | subtitles smaller / larger |
+| `d` | deinterlace on / off |
+| `q` | quit |
+
+Useful options for the CRT, also checked: `--sub-file=film.de.srt` (load a subtitle file; at runtime `sub-add`),
+`--deinterlace=yes` or `--vf=yadif` (for interlaced sources such as DVDs and TV recordings shown in a progressive mode;
+for the 480i/576i modes use the field order and flicker filter instead), `--sws-scaler=lanczos` (the scaler used to
+fit the picture to the CRT mode; `bicubic` is the default) and every option in [MISTER.md](MISTER.md). Your own Lua
+scripts in `~/.config/mpv/scripts` load as usual. With the AppImage, unpack it once
+(`./misterMPV-*.AppImage --appimage-extract`) and run `squashfs-root/usr/bin/mpv`.
+
+## CRT geometry and calibration
+
+What fills the screen is decided in three places:
+
+- **Modeline** (**Output → Modeline**): the 15 kHz mode the CRT receives. `auto` picks 240p/480i at 60 Hz or
+  288p/576i at 50 Hz from the source's frame rate and height; a fixed mode can be chosen as well
+  (256/320/720x240p60, 320/640/720x480i60, 256/320/720x288p50, 320/720x576i50).
+- **Format** (**Output → Format**): how the picture is fitted into that mode (keep aspect with bars, stretch, zoom, or a
+  fixed 4:3 / 16:9 / 21:9).
+- **CRT calibration**: size and position inside the raster, so that nothing disappears behind the bezel. This is
+  stored and applies to every mode, to local playback and to Jellyfin casts alike.
 
 Most CRTs overscan: the edges of the picture sit behind the bezel, and the visible area is often a little off centre.
 The calibration scales and shifts the picture inside the 15 kHz raster so that all of it is visible. The values are
@@ -226,14 +394,16 @@ window: `--mister-calibrate=yes` shows the pattern, the size and shift options a
 
 ## Features
 
+- Video first: films, series, YouTube and live streams with subtitles, audio track selection and chapters (mpv);
+  music works too.
 - Output to the CRT: automatic modeline (25/50 fps to the 50 Hz modes, everything else 60 Hz), TFF/BFF field order,
-  flicker filter for interlaced modes, lossless or near-lossless codec.
+  flicker filter for interlaced modes, NLC codec (lossless or near 1-3).
 - Picture: brightness, contrast, saturation, black level, four scanline styles, aspect modes (auto, stretch, zoom, 4:3,
   16:9, 21:9), CRT size/position calibration with a test pattern.
 - Gamepad control from the MiSTer with on-screen status.
 - Winamp-style playlist: sortable table, drag and drop, recursive folders, right-click menu, shuffle that keeps the order,
-  repeat modes, YouTube and stream URLs, SMB/SFTP shares through KDE's kio-fuse.
-- Tags, durations and cover-less music handling: `ffprobe` in the background with a cache; artist taken from the folder
+  repeat modes, YouTube (yt-dlp) and stream URLs, SMB/SFTP shares through KDE's kio-fuse.
+- Tags, durations and music handling: `ffprobe` in the background with a cache; artist taken from the folder
   structure when the tag is missing; visualizers (spectrum, waves, vectorscope, spectrogram, bars); permanent
   artist/title overlay.
 - Subtitles: size, position, colour, placement in the black bars of letterboxed films.
@@ -251,7 +421,7 @@ window: `--mister-calibrate=yes` shows the pattern, the size and shift options a
 | ![Row menu](mister-ui/screenshots/menu-context.png) ![Sort menu](mister-ui/screenshots/menu-sort.png) | ![Status lamp](mister-ui/screenshots/leds.png) |
 | Right-click menu and sort menu | Status lamp: stopped, starting, playing, paused |
 
-The test pattern and a before/after view are in [CRT calibration](#crt-calibration).
+The test pattern and a before/after view are in [CRT geometry and calibration](#crt-geometry-and-calibration).
 
 ## How it works
 

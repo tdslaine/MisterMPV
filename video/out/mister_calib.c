@@ -1,5 +1,5 @@
-// CRT picture size/position calibration for the mister VO. Port of CrtGeometry from our
-// MiSTerCast for Linux (sibling project, same author):
+// CRT picture size/position calibration for the mister VO. Port of CrtGeometry from MisterCAP,
+// our Linux port of MiSTerCast (sibling project, same author, not publicly released):
 // the picture is scaled to hsize/vsize percent of the output raster, centred, then shifted.
 // For interlaced modes the raster is one *field*, so vertical units are field lines.
 #include <math.h>

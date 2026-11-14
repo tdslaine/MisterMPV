@@ -55,5 +55,6 @@ the whole `mister-ui` window, and the build integration.
 
 ## Sibling project
 
-**MiSTerCast for Linux** (screen / game / media cast to the same core, KDE/Wayland) - the project this player grew out
-of; the CRT calibration, the flicker filter and the colour handling were first built there.
+**MisterCAP**, our Linux port of iequalshane's MiSTerCast (screen / game / media cast to the same core, KDE/Wayland):
+the project this player grew out of. The CRT calibration, the flicker filter and the colour handling were first built
+there. MisterCAP has no public release.

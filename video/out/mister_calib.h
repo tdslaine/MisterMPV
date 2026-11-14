@@ -5,7 +5,7 @@
 
 struct mister_rect { int x, y, w, h; };   // x/y may be negative, x+w / y+h may exceed the raster
 
-// Where the picture lands in an out_w x out_h raster (see CrtGeometry in MiSTerCast).
+// Where the picture lands in an out_w x out_h raster (see CrtGeometry in MisterCAP).
 // hsize/vsize 80..100 %, hoff -72..72 px, voff -28..28 raster lines.
 void mister_picture_rect(double hsize, double vsize, int hoff, int voff,
                          int out_w, int out_h, struct mister_rect *r);

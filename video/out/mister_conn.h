@@ -7,7 +7,7 @@
 
 // Shared GroovyNLC connection used by vo_mister and ao_mister. The first caller of
 // mister_acquire() decides host/modeline/near; later callers share the connection.
-// A sender thread repeats the last frame at the output rate (like the MiSTerCast engine).
+// A sender thread repeats the last frame at the output rate (like the MisterCAP engine).
 struct mister_info {
     int width;          // active width
     int height;         // full frame height (vactive)
@@ -23,7 +23,7 @@ bool mister_switch(const char *modeline, struct mister_info *info);
 void mister_release(void);
 
 // Picture adjustments applied to every frame the sender transmits (live, also while paused).
-// Same maths as MiSTerCast's applyColorFx. brightness/contrast/saturation use mpv's
+// Same maths as MisterCAP's applyColorFx. brightness/contrast/saturation use mpv's
 // -100..100 scale (0 = neutral); black 0..30 lifts blacks; scanlines 0..100 % darkens odd rows.
 // scanstyle: 0 = dark odd rows (1:2), 1 = dark every 3rd row, 2 = dark odd rows + bright even rows,
 // 3 = RGB phosphor mask (columns).

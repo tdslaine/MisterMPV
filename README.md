@@ -614,7 +614,7 @@ misterMPV is a small layer on top of a lot of other people's work. A big, heartf
 - **[Sorgelig](https://github.com/sorgelig)** (Alexey Melnikov) and everyone in the [MiSTer FPGA](https://github.com/MiSTer-devel/Main_MiSTer)
   project for the platform itself;
 - **[iequalshane](https://github.com/iequalshane)** (Shane Lynch) for [MiSTerCast](https://github.com/iequalshane/MiSTerCast),
-  which my Linux port of MiSTerCast, and with it this player, grew out of;
+  which my Linux port MisterCAP (not publicly released), and with it this player, grew out of;
 - **[Dylan Wreggelsworth](https://github.com/dylan)** for [groovy-mister-zig](https://github.com/dylan/groovy-mister-zig), the
   protocol library under the hood, and **[Frank Denis](https://github.com/jedisct1)** for
   [zig-lz4](https://github.com/jedisct1/zig-lz4) (and Yann Collet for [LZ4](https://lz4.org));

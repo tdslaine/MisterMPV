@@ -1,6 +1,6 @@
 // Shared GroovyNLC (MiSTer FPGA) connection for the mister VO/AO.
-// Frame encoding and the wire format are identical to CastEngineGMZ in our MiSTerCast for Linux
-// (sibling project, same author).
+// Frame encoding and the wire format are identical to CastEngineGMZ in MisterCAP, our Linux port of
+// MiSTerCast (sibling project, same author, not publicly released).
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -185,7 +185,7 @@ static int clampi_(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v
 
 // The table modeline with the sync pulse moved by the fine-tune shift. Pulse width, totals and
 // pixel clock stay as they are, so line/field rates do not change; the pulse is kept inside the
-// blanking (same rule as MiSTerCast's modeline nudge). Moving the pulse later moves the picture
+// blanking (same rule as MisterCAP's modeline nudge). Moving the pulse later moves the picture
 // the other way on the CRT, hence the minus.
 static void fill_gm(const struct ml *m, gmz_modeline_t *gm, int *rdh, int *rdv)
 {
